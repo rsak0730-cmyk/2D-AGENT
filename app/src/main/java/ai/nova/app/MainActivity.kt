@@ -1,6 +1,8 @@
 package ai.nova.app
 
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -15,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -52,6 +55,7 @@ private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assista
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NovaApp(settings: SecureSettings) {
+    val context = LocalContext.current
     var section by remember { mutableStateOf(Section.ASSISTANT) }
     var base by remember { mutableStateOf(settings.get("base")) }
     var token by remember { mutableStateOf(settings.get("token")) }
@@ -81,6 +85,7 @@ private fun NovaApp(settings: SecureSettings) {
     var registryKey by remember { mutableStateOf("") }
     var registryModel by remember { mutableStateOf("") }
     var registryAccountId by remember { mutableStateOf("") }
+    var registryEndpoint by remember { mutableStateOf("") }
     var registryStatus by remember { mutableStateOf("") }
     var editingAgent by remember { mutableStateOf<WorkforceAgent?>(null) }
     val chat = remember { mutableStateListOf<ChatLine>() }
@@ -225,15 +230,36 @@ private fun NovaApp(settings: SecureSettings) {
         onDismissRequest = { providerDialog = false; registryKey = "" },
         title = { Text("Provider router setup") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(value = registryProvider, onValueChange = { registryProvider = it.trim().lowercase() }, label = { Text("Provider: arena, groq, gemini, openrouter, cloudflare") }, singleLine = true)
-            OutlinedTextField(value = registryKey, onValueChange = { registryKey = it }, label = { Text("Provider API key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-            OutlinedTextField(value = registryModel, onValueChange = { registryModel = it }, label = { Text("Exact model ID (optional; use Test to discover)") }, singleLine = true)
+            OutlinedTextField(value = registryProvider, onValueChange = { registryProvider = it.trim().lowercase() }, label = { Text("Provider identity") }, supportingText = { Text("arena · groq · gemini · openrouter · cloudflare · claude_gateway") }, singleLine = true)
+            OutlinedTextField(value = registryKey, onValueChange = { registryKey = it }, label = { Text("API key or gateway bearer token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+            if (registryProvider == "claude_gateway") OutlinedTextField(value = registryEndpoint, onValueChange = { registryEndpoint = it.trim() }, label = { Text("Gateway HTTPS base URL (usually ends /v1)") }, supportingText = { Text("Backend operator must allow-list this hostname in NOVA_GATEWAY_ALLOWED_HOSTS.") }, singleLine = true)
+            OutlinedTextField(value = registryModel, onValueChange = { registryModel = it }, label = { Text("Exact model ID (optional; discovered after test)") }, singleLine = true)
             if (registryProvider == "cloudflare") OutlinedTextField(value = registryAccountId, onValueChange = { registryAccountId = it.trim() }, label = { Text("Cloudflare account ID") }, singleLine = true)
-            Text("Keys are sent to your configured backend and Fernet-encrypted there. The API uses fixed provider endpoints; no client-provided URL is accepted. Model availability and quotas are checked against your provider account.", style = MaterialTheme.typography.bodySmall)
+            Text("Provider keys and gateway tokens are Fernet-encrypted by the backend; they are never returned to the app. A successful test confirms model-list access only, not inference, free quotas, or future availability.", style = MaterialTheme.typography.bodySmall)
+            val providerDocsUrl = when (registryProvider) {
+                "arena" -> "https://platform.arena.ai/docs/api"
+                "groq" -> "https://console.groq.com/docs/quickstart"
+                "gemini" -> "https://ai.google.dev/gemini-api/docs/openai"
+                "openrouter" -> "https://openrouter.ai/docs/quickstart"
+                "cloudflare" -> "https://developers.cloudflare.com/workers-ai/get-started/rest-api/"
+                "claude_gateway" -> "https://github.com/Mukller/claude-code-gateway"
+                else -> null
+            }
+            if (providerDocsUrl != null) TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(providerDocsUrl))) }) { Text("Open provider setup docs") }
+            if (registryProvider == "claude_gateway") Text("Self-hosted; requires your own upstream provider credentials and inference budget.", style = MaterialTheme.typography.bodySmall)
             Text(registryStatus, style = MaterialTheme.typography.bodySmall)
-            providerConnections.forEach { Text("${it.provider} · ${it.status} · ${it.models.take(3).joinToString()}", style = MaterialTheme.typography.labelSmall) }
+            providerConnections.forEach { connection ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Text("${connection.provider} · ${connection.status} · ${connection.models.size} discovered model IDs", style = MaterialTheme.typography.labelSmall)
+                    Text(connection.models.take(3).joinToString(), style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                    Row {
+                        TextButton(enabled = !providerBusy, onClick = { providerBusy = true; registryStatus = "Testing saved ${connection.provider} connection…"; scope.launch { try { val ids = withContext(Dispatchers.IO) { testProviderConnectionById(base, token, connection.id) }; registryStatus = "Connection test succeeded · ${ids.size} models listed"; refreshWorkforce() } catch (e: Exception) { registryStatus = e.message ?: "Connection test failed"; refreshWorkforce() } finally { providerBusy = false } }) { Text("Test") }
+                        TextButton(enabled = !providerBusy, onClick = { providerBusy = true; scope.launch { try { withContext(Dispatchers.IO) { removeProviderConnection(base, token, connection.id) }; registryStatus = "${connection.provider} disconnected"; refreshWorkforce() } catch (e: Exception) { registryStatus = e.message ?: "Could not disconnect" } finally { providerBusy = false } }) { Text("Disconnect") }
+                    }
+                }
+            }
         } },
-        confirmButton = { TextButton(enabled = registryKey.length >= 8 && !providerBusy, onClick = { providerBusy = true; registryStatus = "Saving encrypted provider key…"; scope.launch { try { val id = withContext(Dispatchers.IO) { saveProviderConnection(base, token, registryProvider, registryKey, registryModel, registryAccountId) }; registryKey = ""; val ids = withContext(Dispatchers.IO) { testProviderConnectionById(base, token, id) }; registryStatus = "Connected · ${ids.size} verified model IDs"; refreshWorkforce() } catch (e: Exception) { registryStatus = e.message ?: "Provider setup failed" } finally { providerBusy = false } } }) { Text(if (providerBusy) "Checking…" else "Save and test") } },
+        confirmButton = { TextButton(enabled = registryKey.length >= 8 && !providerBusy && (registryProvider != "claude_gateway" || registryEndpoint.startsWith("https://")), onClick = { providerBusy = true; registryStatus = "Saving encrypted provider key…"; scope.launch { try { val id = withContext(Dispatchers.IO) { saveProviderConnection(base, token, registryProvider, registryKey, registryModel, registryAccountId, registryEndpoint) }; registryKey = ""; val ids = withContext(Dispatchers.IO) { testProviderConnectionById(base, token, id) }; registryStatus = "Connected · ${ids.size} verified model IDs"; refreshWorkforce() } catch (e: Exception) { registryStatus = e.message ?: "Provider setup failed" } finally { providerBusy = false } } }) { Text(if (providerBusy) "Checking…" else "Save and test") } },
         dismissButton = { TextButton(onClick = { providerDialog = false; registryKey = "" }) { Text("Close") } }
     )
     editingAgent?.let { agent ->
@@ -244,6 +270,8 @@ private fun NovaApp(settings: SecureSettings) {
             Text("Identity ${agent.identity} stays independent even when model/provider choices are shared.", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(value = selectedProvider, onValueChange = { selectedProvider = it.trim().lowercase() }, label = { Text("Provider identity") }, singleLine = true)
             OutlinedTextField(value = selectedModel, onValueChange = { selectedModel = it.trim() }, label = { Text("Exact model ID from provider discovery") }, singleLine = true)
+            val availableAgentModels = providerConnections.firstOrNull { it.provider == selectedProvider }?.models.orEmpty()
+            if (availableAgentModels.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) { items(availableAgentModels.take(30)) { modelId -> TextButton(onClick = { selectedModel = modelId }) { Text(modelId, maxLines = 1) } } }
             OutlinedTextField(value = selectedInstructions, onValueChange = { selectedInstructions = it }, label = { Text("Agent-specific instructions") }, minLines = 3, maxLines = 6)
             Text("Specialties: ${agent.specialties.joinToString()}", style = MaterialTheme.typography.labelSmall)
         } }, confirmButton = { TextButton(enabled = selectedProvider.isNotBlank() && selectedModel.isNotBlank() && !workforceBusy, onClick = { workforceBusy = true; scope.launch { try { val updated = withContext(Dispatchers.IO) { saveAgentConfig(base, token, agent, selectedProvider, selectedModel, selectedInstructions) }; workforceAgents.indexOfFirst { it.id == updated.id }.takeIf { it >= 0 }?.let { index -> workforceAgents[index] = updated }; workforceNotice = "Saved ${updated.identity} model and instructions."; editingAgent = null } catch (e: Exception) { workforceNotice = e.message ?: "Could not update agent" } finally { workforceBusy = false } } }) { Text("Save agent") } }, dismissButton = { TextButton(onClick = { editingAgent = null }) { Text("Cancel") } })
@@ -428,13 +456,18 @@ private fun saveAgentConfig(base: String, token: String, agent: WorkforceAgent, 
     return WorkforceAgent(item.getString("id"), item.getString("identity"), item.getString("name"), item.getString("job_title"), item.getString("provider"), item.getString("model_id"), item.optString("instructions", ""), item.optString("status", "idle"), jsonStrings(item.optJSONArray("specialties")), item.optDouble("temperature", 0.2), item.optInt("context_length", 8192), jsonStrings(item.optJSONArray("tool_permissions")), item.optBoolean("memory_enabled", true), item.optInt("priority", 50), item.optBoolean("critical"), item.optInt("max_task_duration_seconds", 300))
 }
 
-private fun saveProviderConnection(base: String, token: String, provider: String, apiKey: String, model: String, accountId: String): String {
-    if (provider !in listOf("arena", "groq", "gemini", "openrouter", "cloudflare")) throw IOException("Choose a supported provider identity")
+private fun saveProviderConnection(base: String, token: String, provider: String, apiKey: String, model: String, accountId: String, endpoint: String): String {
+    if (provider !in listOf("arena", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway")) throw IOException("Choose a supported provider identity")
     if (provider == "cloudflare" && accountId.isBlank()) throw IOException("Cloudflare account ID is required")
     val models = org.json.JSONArray().also { if (model.isNotBlank()) it.put(model.trim()) }
     val body = JSONObject().put("provider", provider).put("api_key", apiKey.trim()).put("model_ids", models)
     if (provider == "cloudflare") body.put("account_id", accountId.trim())
+    if (provider == "claude_gateway") body.put("endpoint", endpoint.trim().trimEnd('/'))
     return JSONObject(authorizedRequest(base, token, "/api/v1/providers/connections", "POST", body)).getString("id")
+}
+
+private fun removeProviderConnection(base: String, token: String, id: String) {
+    authorizedRequest(base, token, "/api/v1/providers/connections/$id", "DELETE")
 }
 
 private fun testProviderConnectionById(base: String, token: String, id: String): List<String> {
