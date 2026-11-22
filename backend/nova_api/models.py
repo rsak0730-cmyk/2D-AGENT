@@ -67,7 +67,7 @@ class ProviderConnection(Base):
 
 class Agent(Base):
     __tablename__ = "agents"
-    __table_args__ = (UniqueConstraint("owner_key_id", "name", name="uq_agent_owner_name"),)
+    __table_args__ = (UniqueConstraint("owner_key_id", "name", name="uq_agent_owner_name"), UniqueConstraint("owner_key_id", "identity", name="uq_agent_owner_identity"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     owner_key_id: Mapped[str | None] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=True, index=True)
     identity: Mapped[str] = mapped_column(String(80), default="worker")

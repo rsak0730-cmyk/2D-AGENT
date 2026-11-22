@@ -14,6 +14,8 @@ def test_roster_is_idempotent_and_isolated():
     body = seeded.json()
     assert len(body) == 11 and {x["identity"] for x in body} == {"manager", "android", "web", "game", "ui-ux", "backend", "database", "security", "qa", "research", "documentation"}
     assert client.post("/api/v1/agents/seed", headers=owner).json() == body
+    duplicate = client.post("/api/v1/agents", headers=owner, json={"identity":"manager", "name":"Second Manager"})
+    assert duplicate.status_code == 409
     stranger = auth_key(["agents:read"])
     assert client.get("/api/v1/agents", headers=stranger).json() == []
     assert client.put(f"/api/v1/agents/{body[0]['id']}", headers=stranger, json={}).status_code == 403

@@ -12,6 +12,7 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS critical boolean NOT NULL DEFAULT fa
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS max_task_duration_seconds integer NOT NULL DEFAULT 300;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_owner_name ON agents(owner_key_id, name);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_owner_identity ON agents(owner_key_id, identity);
 CREATE INDEX IF NOT EXISTS ix_agents_owner_key_id ON agents(owner_key_id);
 CREATE INDEX IF NOT EXISTS ix_agents_status ON agents(status);
 

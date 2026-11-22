@@ -132,6 +132,7 @@ def clear_provider_configuration(db: Session = Depends(get_db), key: ApiKey = De
 
 @app.post("/api/v1/agents", response_model=AgentView)
 def create_agent(body: AgentCreate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:write"))):
+    if db.query(Agent).filter(Agent.owner_key_id==key.id, Agent.identity==body.identity).first(): raise HTTPException(409,"An agent with this role identity already exists")
     row = Agent(owner_key_id=key.id, **body.model_dump()); db.add(row); db.commit(); db.refresh(row); return row
 
 @app.get("/api/v1/agents", response_model=list[AgentView])
@@ -142,6 +143,8 @@ def list_agents(db: Session = Depends(get_db), key: ApiKey = Depends(require_sco
 def update_agent(agent_id: str, body: AgentUpdate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:write"))):
     row = db.query(Agent).filter(Agent.id == agent_id, Agent.owner_key_id == key.id).first()
     if row is None: raise HTTPException(404, "Agent not found")
+    duplicate = db.query(Agent).filter(Agent.owner_key_id==key.id, Agent.identity==body.identity, Agent.id!=row.id).first()
+    if duplicate: raise HTTPException(409,"An agent with this role identity already exists")
     for field, value in body.model_dump().items(): setattr(row, field, value)
     db.commit(); db.refresh(row)
     db.add(ActivityEvent(owner_key_id=key.id, agent_id=row.id, event_type="agent.updated", payload={"identity":row.identity})); db.commit()
