@@ -4,7 +4,7 @@ from conftest import auth_key, client
 
 def test_conversation_history_search_and_key_isolation(monkeypatch):
     observed = []
-    async def fake_completion(message, model=None, history=None):
+    async def fake_completion(message, model=None, history=None, **kwargs):
         observed.append(history or [])
         return f"reply:{message}", "test-model"
     monkeypatch.setattr(main, "complete", fake_completion)

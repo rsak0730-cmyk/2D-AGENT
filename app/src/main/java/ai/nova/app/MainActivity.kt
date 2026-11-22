@@ -3,9 +3,9 @@ package ai.nova.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,6 +39,8 @@ class MainActivity : ComponentActivity() {
 
 private data class ChatLine(val text: String, val fromUser: Boolean)
 private data class ConversationSummary(val id: String, val title: String)
+private data class ProviderConfig(val provider: String, val modelId: String, val configured: Boolean, val keySource: String)
+private data class ProviderTestResult(val modelsAvailable: Int, val modelIds: List<String>)
 private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Agents"), TASKS("Tasks"), SETTINGS("Settings") }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,6 +50,14 @@ private fun NovaApp(settings: SecureSettings) {
     var base by remember { mutableStateOf(settings.get("base")) }
     var token by remember { mutableStateOf(settings.get("token")) }
     var showSettings by remember { mutableStateOf(false) }
+    var showProviderSettings by remember { mutableStateOf(false) }
+    var providerKey by remember { mutableStateOf("") }
+    var providerModel by remember { mutableStateOf("coding-router-preview") }
+    var providerModelOptions by remember { mutableStateOf(emptyList<String>()) }
+    var providerStatus by remember { mutableStateOf("Not configured") }
+    var providerConfigured by remember { mutableStateOf(false) }
+    var providerKeySource by remember { mutableStateOf("not_configured") }
+    var providerBusy by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     var conversationId by remember { mutableStateOf<String?>(null) }
     val conversations = remember { mutableStateListOf<ConversationSummary>() }
@@ -56,6 +66,20 @@ private fun NovaApp(settings: SecureSettings) {
     var status by remember { mutableStateOf("Connect a NOVA backend in Settings to send messages.") }
     var historyStatus by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val openProviderSettings: () -> Unit = {
+        providerKey = ""
+        showProviderSettings = true
+        providerStatus = "Loading provider status…"
+        scope.launch {
+            try {
+                val config = withContext(Dispatchers.IO) { fetchProviderConfiguration(base, token) }
+                providerModel = config.modelId
+                providerConfigured = config.configured
+                providerKeySource = config.keySource
+                providerStatus = if (config.configured) "Configured · ${config.keySource.replace('_', ' ')}" else "No provider key configured"
+            } catch (e: Exception) { providerStatus = e.message ?: "Could not read provider settings" }
+        }
+    }
     Scaffold(
         topBar = { TopAppBar(title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text("Personal AI workspace", style = MaterialTheme.typography.labelSmall) } }, actions = { if (section == Section.ASSISTANT) { IconButton(onClick = { conversationId = null; chat.clear(); status = "New conversation" }) { Icon(Icons.Default.AddComment, "New conversation") }; IconButton(onClick = { showHistory = true; historyStatus = "Loading history…"; scope.launch { try { val loaded = withContext(Dispatchers.IO) { fetchConversations(base, token) }; conversations.clear(); conversations.addAll(loaded); historyStatus = if (loaded.isEmpty()) "No saved conversations yet." else "Select a conversation to continue." } catch (e: Exception) { historyStatus = e.message ?: "Could not load history" } } }) { Icon(Icons.Default.History, "Conversation history") } }; IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Settings") } }) },
         bottomBar = { NavigationBar { Section.values().forEach { item -> NavigationBarItem(selected = section == item, onClick = { section = item }, icon = { Icon(when(item){Section.HOME->Icons.Default.Home;Section.ASSISTANT->Icons.Default.Chat;Section.HQ->Icons.Default.Business;Section.AGENTS->Icons.Default.Groups;Section.TASKS->Icons.Default.Checklist;Section.SETTINGS->Icons.Default.Settings}, item.title) }, label = { Text(item.title) }) } } }
@@ -64,7 +88,10 @@ private fun NovaApp(settings: SecureSettings) {
             when (section) {
                 Section.ASSISTANT -> {
                     Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                        Column(Modifier.padding(16.dp)) { Text("Your assistant", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text(status, style = MaterialTheme.typography.bodySmall) }
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) { Text("Your assistant", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text(status, style = MaterialTheme.typography.bodySmall) }
+                            TextButton(onClick = openProviderSettings) { Text("AI provider") }
+                        }
                     }
                     LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (chat.isEmpty()) item { EmptyState("Ready when you are", "Connect your own NOVA backend and provider. NOVA won't invent an answer if it is offline.") }
@@ -87,10 +114,49 @@ private fun NovaApp(settings: SecureSettings) {
                 Section.HQ -> EmptyState("Headquarters", "Pixel-art office simulation is in development. No agent activity is shown until real worker events are connected.")
                 Section.AGENTS -> EmptyState("Agent workforce", "Create and manage separately configured model identities through the NOVA API. The mobile management view is not yet implemented.")
                 Section.TASKS -> EmptyState("Tasks", "Persistent task records are available through the backend API. Autonomous execution is not enabled in this build.")
-                Section.SETTINGS -> Column { Text("Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(vertical = 20.dp)); Text("Backend URL: ${base.ifBlank { "Not configured" }}"); Text("API token: ${if (token.isBlank()) "Not configured" else "Stored encrypted on this device"}"); Button(onClick = { showSettings = true }) { Text("Configure backend") } }
+                Section.SETTINGS -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(vertical = 20.dp)); Text("Backend URL: ${base.ifBlank { "Not configured" }}"); Text("NOVA token: ${if (token.isBlank()) "Not configured" else "Stored encrypted on this device"}"); Button(onClick = { showSettings = true }) { Text("Configure backend") }; Text("AI provider: ${if (providerConfigured) "Configured" else "Not configured"}"); Button(onClick = openProviderSettings) { Text("Configure Arena key") } }
             }
         }
     }
+    if (showProviderSettings) AlertDialog(
+        onDismissRequest = { if (!providerBusy) { showProviderSettings = false; providerKey = "" } },
+        title = { Text("AI provider setup") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Arena · OpenAI-compatible API", style = MaterialTheme.typography.labelLarge)
+                OutlinedTextField(value = providerKey, onValueChange = { providerKey = it }, label = { Text(if (providerConfigured) "Replace key (blank keeps saved key)" else "Arena API key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !providerBusy)
+                OutlinedTextField(value = providerModel, onValueChange = { providerModel = it }, label = { Text("Exact model ID") }, singleLine = true, enabled = !providerBusy)
+                if (providerModelOptions.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) { items(providerModelOptions.take(8)) { modelId -> TextButton(onClick = { providerModel = modelId }, enabled = !providerBusy) { Text(modelId, maxLines = 1) } } }
+                Text("The key is sent to your HTTPS NOVA backend and encrypted there. It is not stored in this app or APK.", style = MaterialTheme.typography.bodySmall)
+                Text(providerStatus, style = MaterialTheme.typography.bodySmall, color = if (providerConfigured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !providerBusy && providerModel.isNotBlank(), onClick = { providerBusy = true; providerStatus = "Saving encrypted provider settings…"; scope.launch {
+                try {
+                    val config = withContext(Dispatchers.IO) { saveProviderConfiguration(base, token, providerKey, providerModel) }
+                    providerConfigured = config.configured; providerKeySource = config.keySource; providerModel = config.modelId; providerKey = ""
+                    providerStatus = if (config.configured) "Saved securely · ${config.keySource.replace('_', ' ')}" else "Provider key is not configured"
+                } catch (e: Exception) { providerStatus = e.message ?: "Could not save provider settings" }
+                finally { providerBusy = false }
+            } }) { Text(if (providerBusy) "Saving…" else "Save") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(enabled = !providerBusy && providerConfigured, onClick = { providerBusy = true; providerStatus = "Testing Arena connection…"; scope.launch {
+                    try { val result = withContext(Dispatchers.IO) { testProviderConnection(base, token) }; providerModelOptions = result.modelIds; providerStatus = "Connected · ${result.modelsAvailable} models available; tap a model below" }
+                    catch (e: Exception) { providerStatus = e.message ?: "Provider test failed" }
+                    finally { providerBusy = false }
+                } }) { Text("Test") }
+                if (providerKeySource == "mobile_encrypted") TextButton(enabled = !providerBusy, onClick = { providerBusy = true; scope.launch {
+                    try { val config = withContext(Dispatchers.IO) { clearProviderConfiguration(base, token) }; providerConfigured = config.configured; providerKeySource = config.keySource; providerStatus = if (config.configured) "Using backend environment key" else "Provider key cleared" }
+                    catch (e: Exception) { providerStatus = e.message ?: "Could not clear provider key" }
+                    finally { providerBusy = false }
+                } }) { Text("Remove") }
+                TextButton(enabled = !providerBusy, onClick = { showProviderSettings = false; providerKey = "" }) { Text("Close") }
+            }
+        }
+    )
     if (showHistory) AlertDialog(onDismissRequest = { showHistory = false }, title = { Text("Conversation history") }, text = {
         Column {
             if (historyStatus.isNotBlank()) Text(historyStatus, style = MaterialTheme.typography.bodySmall)
@@ -162,6 +228,41 @@ private fun sendMessage(base: String, token: String, text: String, conversationI
         val body = response.body?.string() ?: throw IOException("Empty response from NOVA backend")
         val json = JSONObject(body)
         return ChatResult(json.getString("response"), json.getString("conversation_id"))
+    }
+}
+private fun fetchProviderConfiguration(base: String, token: String): ProviderConfig {
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/settings/provider").header("Authorization", "Bearer $token").get().build()
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}: ${response.body?.string()?.take(180) ?: "No response body"}")
+        val json = JSONObject(response.body?.string() ?: "{}")
+        return ProviderConfig(json.optString("provider", "arena"), json.optString("model_id", "coding-router-preview"), json.optBoolean("configured"), json.optString("key_source", "not_configured"))
+    }
+}
+private fun saveProviderConfiguration(base: String, token: String, apiKey: String, model: String): ProviderConfig {
+    val body = JSONObject().put("provider", "arena").put("model_id", model.trim())
+    if (apiKey.isNotBlank()) body.put("api_key", apiKey.trim())
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/settings/provider").header("Authorization", "Bearer $token").put(body.toString().toRequestBody("application/json".toMediaType())).build()
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}: ${response.body?.string()?.take(180) ?: "No response body"}")
+        val json = JSONObject(response.body?.string() ?: "{}")
+        return ProviderConfig(json.optString("provider", "arena"), json.optString("model_id", model), json.optBoolean("configured"), json.optString("key_source", "not_configured"))
+    }
+}
+private fun testProviderConnection(base: String, token: String): ProviderTestResult {
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/settings/provider/test").header("Authorization", "Bearer $token").post("{}".toRequestBody("application/json".toMediaType())).build()
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}: ${response.body?.string()?.take(180) ?: "No response body"}")
+        val json = JSONObject(response.body?.string() ?: "{}")
+        val models = json.optJSONArray("model_ids") ?: throw IOException("NOVA API returned no model list")
+        return ProviderTestResult(json.optInt("models_available"), (0 until models.length()).map { models.getString(it) })
+    }
+}
+private fun clearProviderConfiguration(base: String, token: String): ProviderConfig {
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/settings/provider").header("Authorization", "Bearer $token").delete().build()
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}: ${response.body?.string()?.take(180) ?: "No response body"}")
+        val json = JSONObject(response.body?.string() ?: "{}")
+        return ProviderConfig("arena", "coding-router-preview", json.optBoolean("configured"), json.optString("key_source", "not_configured"))
     }
 }
 private fun fetchConversations(base: String, token: String): List<ConversationSummary> {

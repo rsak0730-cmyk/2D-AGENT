@@ -1,16 +1,16 @@
 # API and credential setup
 
-**Never commit API keys.** NOVA's assistant sends model requests from the backend; provider keys do not belong in Android. Use an eligible account, follow each provider's current terms, and supply billing/payment details only through that provider's official site. Availability, pricing, quotas and age eligibility change; check current terms rather than assuming a free tier.
+**Never commit API keys.** NOVA's assistant sends model requests from the backend. The Android provider form transmits the key directly to your backend over HTTPS; it never embeds or retains that provider key in Android or the APK. Use an eligible account, follow each provider's current terms, and supply billing/payment details only through that provider's official site. Availability, pricing, quotas and age eligibility change; check current terms rather than assuming a free tier.
 
 ## Arena — implemented adapter
 
 1. Official docs: [Arena API](https://platform.arena.ai/docs/api), [errors](https://platform.arena.ai/docs/errors), [keys dashboard](https://platform.arena.ai/dashboard/keys).
 2. Sign in/create an account at [Arena](https://platform.arena.ai/); review applicable eligibility, terms, funding and workspace policies.
 3. Create an API key at the Keys page. Arena notes the key can only be copied once; store it in a secret manager immediately.
-4. In the backend deployment secret settings set `NOVA_PROVIDER=arena`, `NOVA_PROVIDER_BASE_URL=https://api.arena.ai/v1`, `NOVA_PROVIDER_API_KEY=<secret>`, and `NOVA_MODEL=coding-router-preview` or another exact model ID returned by `GET https://api.arena.ai/v1/models` for that key. Arena docs identify `coding-router-preview` as a router model; direct models need eligible workspace funds.
-5. Restart service; check `/health` for `provider_configured: true`, then call `/api/v1/assistant/chat` with a scoped token. `/health` does not spend model quota. Chat sends a real provider request.
-6. 401/403: verify key; 429: respect `Retry-After` and shared key limits; 402: check balance/payment; model errors: choose a returned model ID. Never retry a billing/auth error blindly.
-7. Revoke a compromised key in Arena's key dashboard, replace backend secret, restart, and verify. Do not paste it in issue reports.
+4. Configure either the backend environment (`NOVA_PROVIDER=arena`, `NOVA_PROVIDER_BASE_URL=https://api.arena.ai/v1`, `NOVA_PROVIDER_API_KEY=<secret>`, `NOVA_MODEL=<exact model ID>`) **or** enter your Arena key in the Android app's **Assistant → AI provider** setup. For mobile entry, add `NOVA_CREDENTIAL_ENCRYPTION_KEY` to backend secrets; generate it with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`. Keep this encryption key stable, private and backed up: it encrypts provider keys stored in PostgreSQL. The phone sends the provider key only to your NOVA backend over HTTPS. It is not included in or persisted by the APK.
+5. Create the NOVA API key with `assistant:read`, `assistant:write`, `providers:read`, and `providers:write` scopes for chat/history and mobile provider setup. Enter the exact model ID; use the app's **Test** action to fetch model IDs from Arena's documented `GET /v1/models` endpoint. `/health` does not spend model quota; chat sends a real provider request.
+6. The mobile-stored provider key is encrypted at rest and scoped to that NOVA API key. Removing the mobile credential in the app deletes that override; if `NOVA_PROVIDER_API_KEY` is set on the server, the backend then falls back to that environment key.
+7. 401/403: verify/re-enter key; 429: respect `Retry-After` and shared key limits; 402: check balance/payment; model errors: choose a returned model ID. Never retry a billing/auth error blindly. Revoke a compromised key in Arena's dashboard and clear or replace it in NOVA. Do not paste it in issue reports.
 
 ## Other provider and product setup status
 

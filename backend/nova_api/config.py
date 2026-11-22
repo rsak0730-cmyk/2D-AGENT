@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     provider_api_key: str = ""
     model: str = "coding-router-preview"
     request_timeout_seconds: float = 45.0
+    credential_encryption_key: str = ""
 
 @lru_cache
 def get_settings() -> Settings:

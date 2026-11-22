@@ -21,6 +21,7 @@ services:
       NOVA_PROVIDER_BASE_URL: ${NOVA_PROVIDER_BASE_URL:-https://api.arena.ai/v1}
       NOVA_PROVIDER_API_KEY: ${NOVA_PROVIDER_API_KEY:-}
       NOVA_MODEL: ${NOVA_MODEL:-coding-router-preview}
+      NOVA_CREDENTIAL_ENCRYPTION_KEY: ${NOVA_CREDENTIAL_ENCRYPTION_KEY:-}
     ports: ["8000:8000"]
     depends_on:
       db:

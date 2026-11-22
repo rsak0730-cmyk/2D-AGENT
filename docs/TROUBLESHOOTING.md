@@ -1,6 +1,6 @@
 # Troubleshooting
 
-- `503 No AI provider key configured`: set `NOVA_PROVIDER_API_KEY` in backend secret environment and restart; do not enter provider keys in Android.
+- `503 No AI provider key configured`: configure `NOVA_PROVIDER_API_KEY` in backend secrets, or add `NOVA_CREDENTIAL_ENCRYPTION_KEY` and save an Arena key from the app's AI provider setup. Provider setup requires `providers:read` and `providers:write` scopes.
 - `401` from NOVA: scoped token is missing/invalid/revoked/expired; create a new key with minimum required scope. Do not share admin token with mobile app.
 - `403 Missing required scope`: issue a new narrow key containing the required scope; scope escalation is intentional.
 - Provider `429`: respect returned `Retry-After`, avoid tight retry loops and remember Arena keys share quota limits.

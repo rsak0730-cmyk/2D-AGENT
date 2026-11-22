@@ -34,6 +34,16 @@ class ConversationMessage(Base):
     status: Mapped[str] = mapped_column(String(24), default="complete")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
+class ProviderCredential(Base):
+    __tablename__ = "provider_credentials"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="arena")
+    model_id: Mapped[str] = mapped_column(String(160), default="coding-router-preview")
+    encrypted_api_key: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
 class Agent(Base):
     __tablename__ = "agents"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))

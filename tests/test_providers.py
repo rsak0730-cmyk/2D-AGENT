@@ -18,6 +18,10 @@ def test_success_returns_actual_provider_completion(monkeypatch):
     text, model = asyncio.run(providers.complete("question"))
     assert (text, model) == ("real completion", "served-model")
 
+def test_provider_model_discovery(monkeypatch):
+    install_transport(monkeypatch, httpx.Response(200, json={"data":[{"id":"coding-router-preview"},{"id":"model-exact"}]}))
+    assert asyncio.run(providers.list_models("secret-test")) == ["coding-router-preview", "model-exact"]
+
 def test_429_respects_retry_after_without_reflecting_body(monkeypatch):
     from fastapi import HTTPException
     install_transport(monkeypatch, httpx.Response(429, headers={"Retry-After":"17"}, text="private upstream detail"))

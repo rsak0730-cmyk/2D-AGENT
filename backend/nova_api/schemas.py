@@ -14,6 +14,23 @@ class KeyView(BaseModel):
     expires_at: datetime | None
     revoked: bool
 
+class ProviderCredentialUpdate(BaseModel):
+    provider: Literal["arena"] = "arena"
+    model_id: str = Field(default="coding-router-preview", min_length=1, max_length=160)
+    api_key: str | None = None
+
+class ProviderConfigurationView(BaseModel):
+    provider: str
+    model_id: str
+    configured: bool
+    key_source: Literal["mobile_encrypted", "backend_environment", "not_configured"]
+
+class ProviderConnectionTest(BaseModel):
+    provider: str
+    ok: bool
+    models_available: int
+    model_ids: list[str]
+
 class AgentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     job_title: str = Field(default="Assistant", max_length=100)

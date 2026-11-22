@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session
 from .auth import digest, new_secret, require_admin, require_scope
 from .config import get_settings
 from .db import Base, engine, get_db
-from .models import Agent, ApiKey, Conversation, ConversationMessage, Task
-from .providers import complete
-from .schemas import AgentCreate, AgentView, ChatRequest, ChatResponse, CheckpointUpdate, ConversationDetail, ConversationView, KeyCreate, KeyView, TaskCreate, TaskView
+from .credentials import decrypt_secret, encrypt_secret
+from .models import Agent, ApiKey, Conversation, ConversationMessage, ProviderCredential, Task
+from .providers import complete, list_models
+from .schemas import AgentCreate, AgentView, ChatRequest, ChatResponse, CheckpointUpdate, ConversationDetail, ConversationView, KeyCreate, KeyView, ProviderConfigurationView, ProviderConnectionTest, ProviderCredentialUpdate, TaskCreate, TaskView
 
 TASK_STATES = {"RECEIVED", "ANALYZING", "PLANNING", "RECRUITING", "ASSIGNED", "RUNNING", "WAITING_FOR_TOOL", "WAITING_FOR_API", "WAITING_FOR_APPROVAL", "PAUSED", "FAILED", "TESTING", "COMPLETED", "CANCELLED"}
 clients: set[WebSocket] = set()
@@ -52,7 +53,7 @@ def health(db: Session = Depends(get_db)):
 @app.post("/api/v1/admin/api-keys", dependencies=[Depends(require_admin)], response_model=dict)
 def create_api_key(body: KeyCreate, db: Session = Depends(get_db)):
     scopes = sorted(set(body.scopes))
-    allowed = {"assistant:read", "assistant:write", "tasks:read", "tasks:write", "agents:read", "agents:write", "office:read", "events:read"}
+    allowed = {"assistant:read", "assistant:write", "providers:read", "providers:write", "tasks:read", "tasks:write", "agents:read", "agents:write", "office:read", "events:read"}
     if not set(scopes) <= allowed:
         raise HTTPException(422, "One or more API scopes are unsupported")
     if body.expires_at and (body.expires_at.tzinfo is None or body.expires_at.utcoffset() is None):
@@ -71,7 +72,61 @@ def list_api_keys(db: Session = Depends(get_db)):
 def revoke_api_key(key_id: str, db: Session = Depends(get_db)):
     row = db.get(ApiKey, key_id)
     if row is None: raise HTTPException(404, "API key not found")
-    row.revoked = True; db.commit(); return {"revoked": True, "id": row.id}
+    row.revoked = True
+    db.query(ProviderCredential).filter(ProviderCredential.owner_key_id == row.id).delete(synchronize_session=False)
+    db.commit(); return {"revoked": True, "id": row.id}
+
+@app.get("/api/v1/settings/provider", response_model=ProviderConfigurationView)
+def get_provider_configuration(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("providers:read"))):
+    stored = db.query(ProviderCredential).filter(ProviderCredential.owner_key_id == key.id).first()
+    if stored:
+        return ProviderConfigurationView(provider=stored.provider, model_id=stored.model_id, configured=True, key_source="mobile_encrypted")
+    cfg = get_settings()
+    if cfg.provider_api_key:
+        return ProviderConfigurationView(provider=cfg.provider, model_id=cfg.model, configured=True, key_source="backend_environment")
+    return ProviderConfigurationView(provider="arena", model_id=cfg.model, configured=False, key_source="not_configured")
+
+@app.put("/api/v1/settings/provider", response_model=ProviderConfigurationView)
+def save_provider_configuration(body: ProviderCredentialUpdate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("providers:write"))):
+    row = db.query(ProviderCredential).filter(ProviderCredential.owner_key_id == key.id).first()
+    raw = body.api_key.strip() if body.api_key is not None else ""
+    if body.api_key is not None and (len(raw) < 8 or len(raw) > 4096):
+        raise HTTPException(422, "Provider key length is invalid")
+    if raw:
+        encrypted = encrypt_secret(raw)
+        if row is None:
+            row = ProviderCredential(owner_key_id=key.id, provider=body.provider, model_id=body.model_id, encrypted_api_key=encrypted)
+            db.add(row)
+        else:
+            row.provider = body.provider; row.model_id = body.model_id; row.encrypted_api_key = encrypted
+    elif row:
+        row.model_id = body.model_id; row.provider = body.provider
+    elif not get_settings().provider_api_key:
+        raise HTTPException(422, "Enter a provider API key before saving this configuration")
+    db.commit()
+    if row:
+        return ProviderConfigurationView(provider=row.provider, model_id=row.model_id, configured=True, key_source="mobile_encrypted")
+    cfg = get_settings()
+    return ProviderConfigurationView(provider=cfg.provider, model_id=body.model_id, configured=True, key_source="backend_environment")
+
+@app.post("/api/v1/settings/provider/test", response_model=ProviderConnectionTest)
+async def test_provider_configuration(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("providers:write"))):
+    row = db.query(ProviderCredential).filter(ProviderCredential.owner_key_id == key.id).first()
+    if row:
+        secret, provider = decrypt_secret(row.encrypted_api_key), row.provider
+    else:
+        cfg = get_settings(); secret, provider = cfg.provider_api_key, cfg.provider
+    if not secret:
+        raise HTTPException(422, "Save an AI provider key before testing the connection")
+    model_ids = await list_models(secret)
+    return ProviderConnectionTest(provider=provider, ok=True, models_available=len(model_ids), model_ids=model_ids)
+
+@app.delete("/api/v1/settings/provider")
+def clear_provider_configuration(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("providers:write"))):
+    row = db.query(ProviderCredential).filter(ProviderCredential.owner_key_id == key.id).first()
+    if row:
+        db.delete(row); db.commit()
+    return {"configured":bool(get_settings().provider_api_key), "key_source":"backend_environment" if get_settings().provider_api_key else "not_configured"}
 
 @app.post("/api/v1/agents", response_model=AgentView)
 def create_agent(body: AgentCreate, db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("agents:write"))):
@@ -126,11 +181,18 @@ async def chat(body: ChatRequest, db: Session = Depends(get_db), key: ApiKey = D
     db.add(ConversationMessage(conversation_id=conversation.id, role="user", content=body.message, status="complete"))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
-    text, model = await complete(body.message, body.model, history)
+    stored_provider = db.query(ProviderCredential).filter(ProviderCredential.owner_key_id == key.id).first()
+    if stored_provider:
+        provider_key = decrypt_secret(stored_provider.encrypted_api_key)
+        provider_name, selected_model = stored_provider.provider, body.model or stored_provider.model_id
+    else:
+        provider_key = get_settings().provider_api_key or None
+        provider_name, selected_model = get_settings().provider, body.model or get_settings().model
+    text, model = await complete(body.message, selected_model, history, api_key=provider_key)
     db.add(ConversationMessage(conversation_id=conversation.id, role="assistant", content=text, model=model, status="complete"))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
-    return ChatResponse(response=text, provider=get_settings().provider, model=model, conversation_id=conversation.id)
+    return ChatResponse(response=text, provider=provider_name, model=model, conversation_id=conversation.id)
 
 @app.get("/api/v1/assistant/conversations", response_model=list[ConversationView])
 def list_conversations(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:read"))):
