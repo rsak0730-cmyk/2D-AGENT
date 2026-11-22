@@ -2,14 +2,14 @@ import httpx
 from fastapi import HTTPException
 from .config import get_settings
 
-async def complete(message: str, model: str | None = None) -> tuple[str, str]:
+async def complete(message: str, model: str | None = None, history: list[dict[str, str]] | None = None) -> tuple[str, str]:
     cfg = get_settings()
     if not cfg.provider_api_key:
         raise HTTPException(503, "No AI provider key configured. Add NOVA_PROVIDER_API_KEY to the backend environment.")
     chosen = model or cfg.model
     url = cfg.provider_base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {cfg.provider_api_key}", "Content-Type": "application/json"}
-    body = {"model": chosen, "messages": [{"role": "user", "content": message}]}
+    body = {"model": chosen, "messages": [*(history or []), {"role": "user", "content": message}]}
     try:
         async with httpx.AsyncClient(timeout=cfg.request_timeout_seconds) as client:
             response = await client.post(url, headers=headers, json=body)

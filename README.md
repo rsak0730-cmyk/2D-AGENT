@@ -6,14 +6,14 @@ NOVA is an Android AI assistant backed by a modular API. This repository is an *
 
 - Kotlin/Jetpack Compose Android app shell with Home, Assistant, Headquarters, Agents, Tasks and Settings navigation.
 - HTTPS backend URL and scoped API token settings encrypted at rest using Android Keystore; the API token is not committed or embedded in the APK.
-- FastAPI REST/OpenAPI server with health check, hashed scoped API keys, key revocation, agent identity records, task records and checkpoint updates.
+- FastAPI REST/OpenAPI server with health check, hashed scoped API keys, key revocation, per-key isolated persistent conversations with history/search/delete, agent identity records, task records and checkpoint updates.
 - An actual provider request adapter for Arena's documented OpenAI-compatible Chat Completions API. Without a provider key, chat returns a clear 503; it never fabricates a reply.
 - Authenticated WebSocket task update events and a deterministic tested A* pathfinder library.
 - PostgreSQL Docker Compose configuration, SQL schema baseline, test suites and GitHub Actions workflows for backend CI and Android debug APK artifact builds.
 
 ## Not implemented yet
 
-There is no autonomous task worker, agent execution loop, multi-agent orchestration, conversation persistence, vector memory, MCP connector engine, office renderer/editor, voice flow, reminder scheduler, telephony receptionist, API dashboard, distributed rate limiter, or deployed backend. Task state/checkpoint endpoints store data; they do not run jobs. Read [progress](docs/PROGRESS.md) and the [architecture](docs/ARCHITECTURE.md) for exact boundaries.
+There is no autonomous task worker, agent execution loop, multi-agent orchestration, vector/long-term memory, MCP connector engine, office renderer/editor, voice flow, reminder scheduler, telephony receptionist, API dashboard, distributed rate limiter, or deployed backend. Conversations are persisted and searchable, but task state/checkpoint endpoints only store records; they do not run jobs. Read [progress](docs/PROGRESS.md) and the [architecture](docs/ARCHITECTURE.md) for exact boundaries.
 
 ## Run backend locally
 
@@ -34,7 +34,7 @@ The local default uses SQLite and creates the current development tables automat
 ```sh
 curl -X POST http://localhost:8000/api/v1/admin/api-keys \
   -H "Authorization: Bearer $NOVA_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Android phone","scopes":["assistant:write","tasks:read","tasks:write","agents:read","agents:write","events:read"]}'
+  -d '{"name":"Android phone","scopes":["assistant:read","assistant:write","tasks:read","tasks:write","agents:read","agents:write","events:read"]}'
 ```
 
 Save the one-time `key` value securely; the server stores only its SHA-256 digest. For API security, do not expose the development server directly to the public internet; use HTTPS and a deployment proxy.

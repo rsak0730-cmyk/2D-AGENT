@@ -8,7 +8,7 @@ Android (Compose; Android Keystore token store)
  SQLAlchemy persistence              Provider adapter
  SQLite local / PostgreSQL           Arena OpenAI-compatible
           │                            (server env key)
- API-key records / agents / tasks / task checkpoints
+ API-key records / per-key conversations and messages / agents / tasks / task checkpoints
 
 `office_engine` is presently a pure deterministic A* library; it is not connected to a renderer or agent events.
 ```

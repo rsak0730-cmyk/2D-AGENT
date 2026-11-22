@@ -1,27 +1,5 @@
-from datetime import datetime, timezone
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-from backend.nova_api.db import Base, get_db
-from backend.nova_api.main import app
-from backend.nova_api.auth import digest
-from backend.nova_api.models import ApiKey
-
-engine = create_engine("sqlite://", connect_args={"check_same_thread":False}, poolclass=StaticPool)
-TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-Base.metadata.create_all(engine)
-def override_db():
-    db = TestingSession()
-    try: yield db
-    finally: db.close()
-app.dependency_overrides[get_db] = override_db
-client = TestClient(app)
-
-def auth_key(scopes):
-    raw = "test_" + str(datetime.now().timestamp())
-    db = TestingSession(); row = ApiKey(name="test", key_hash=digest(raw), scopes=scopes); db.add(row); db.commit(); db.close()
-    return {"Authorization": f"Bearer {raw}"}
+from backend.nova_api import main
+from conftest import auth_key, client
 
 def test_health_does_not_require_provider():
     assert client.get("/health").status_code == 200
@@ -46,10 +24,9 @@ def test_tasks_checkpoint_and_persistence():
     assert client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["state"] == "PAUSED"
 
 def test_chat_fails_closed_without_credentials(monkeypatch):
-    from backend import nova_api
+    from fastapi import HTTPException
     async def missing(*args, **kwargs):
-        from fastapi import HTTPException
         raise HTTPException(503, "No AI provider key configured")
-    monkeypatch.setattr(nova_api.main, "complete", missing)
+    monkeypatch.setattr(main, "complete", missing)
     response = client.post("/api/v1/assistant/chat", headers=auth_key(["assistant:write"]), json={"message":"hello"})
     assert response.status_code == 503

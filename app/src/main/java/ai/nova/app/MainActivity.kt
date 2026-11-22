@@ -38,21 +38,26 @@ class MainActivity : ComponentActivity() {
 }
 
 private data class ChatLine(val text: String, val fromUser: Boolean)
+private data class ConversationSummary(val id: String, val title: String)
 private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Agents"), TASKS("Tasks"), SETTINGS("Settings") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NovaApp(settings: SecureSettings) {
     var section by remember { mutableStateOf(Section.ASSISTANT) }
-    var base by remember { mutableStateOf(settings.get("base", "https://your-nova-server.example")) }
+    var base by remember { mutableStateOf(settings.get("base")) }
     var token by remember { mutableStateOf(settings.get("token")) }
     var showSettings by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    var conversationId by remember { mutableStateOf<String?>(null) }
+    val conversations = remember { mutableStateListOf<ConversationSummary>() }
     val chat = remember { mutableStateListOf<ChatLine>() }
     var draft by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Connect a NOVA backend in Settings to send messages.") }
+    var historyStatus by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     Scaffold(
-        topBar = { TopAppBar(title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text("Personal AI workspace", style = MaterialTheme.typography.labelSmall) } }, actions = { IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Settings") } }) },
+        topBar = { TopAppBar(title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text("Personal AI workspace", style = MaterialTheme.typography.labelSmall) } }, actions = { if (section == Section.ASSISTANT) { IconButton(onClick = { conversationId = null; chat.clear(); status = "New conversation" }) { Icon(Icons.Default.AddComment, "New conversation") }; IconButton(onClick = { showHistory = true; historyStatus = "Loading history…"; scope.launch { try { val loaded = withContext(Dispatchers.IO) { fetchConversations(base, token) }; conversations.clear(); conversations.addAll(loaded); historyStatus = if (loaded.isEmpty()) "No saved conversations yet." else "Select a conversation to continue." } catch (e: Exception) { historyStatus = e.message ?: "Could not load history" } } }) { Icon(Icons.Default.History, "Conversation history") } }; IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Settings") } }) },
         bottomBar = { NavigationBar { Section.values().forEach { item -> NavigationBarItem(selected = section == item, onClick = { section = item }, icon = { Icon(when(item){Section.HOME->Icons.Default.Home;Section.ASSISTANT->Icons.Default.Chat;Section.HQ->Icons.Default.Business;Section.AGENTS->Icons.Default.Groups;Section.TASKS->Icons.Default.Checklist;Section.SETTINGS->Icons.Default.Settings}, item.title) }, label = { Text(item.title) }) } } }
     ) { insets ->
         Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 16.dp)) {
@@ -71,7 +76,7 @@ private fun NovaApp(settings: SecureSettings) {
                         Spacer(Modifier.width(8.dp)); IconButton(enabled = !busy && draft.isNotBlank(), onClick = {
                             val text = draft.trim(); draft = ""; chat.add(ChatLine(text, true)); busy = true; status = "Sending to configured backend…"
                             scope.launch {
-                                try { val answer = withContext(Dispatchers.IO) { sendMessage(base, token, text) }; chat.add(ChatLine(answer, false)); status = "Connected · response from configured provider" }
+                                try { val result = withContext(Dispatchers.IO) { sendMessage(base, token, text, conversationId) }; conversationId = result.conversationId; chat.add(ChatLine(result.response, false)); status = "Connected · response from configured provider" }
                                 catch (e: Exception) { status = e.message ?: "Request failed" }
                                 finally { busy = false }
                             }
@@ -86,6 +91,21 @@ private fun NovaApp(settings: SecureSettings) {
             }
         }
     }
+    if (showHistory) AlertDialog(onDismissRequest = { showHistory = false }, title = { Text("Conversation history") }, text = {
+        Column {
+            if (historyStatus.isNotBlank()) Text(historyStatus, style = MaterialTheme.typography.bodySmall)
+            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                items(conversations) { item ->
+                    TextButton(onClick = { scope.launch {
+                        try {
+                            val messages = withContext(Dispatchers.IO) { loadConversation(base, token, item.id) }
+                            conversationId = item.id; chat.clear(); chat.addAll(messages); showHistory = false; section = Section.ASSISTANT; status = "Loaded saved conversation"
+                        } catch (e: Exception) { historyStatus = e.message ?: "Could not load conversation" }
+                    } }, modifier = Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth()) { Text(item.title, maxLines = 2); Text(item.id.take(8), style = MaterialTheme.typography.labelSmall) } }
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { showHistory = false }) { Text("Close") } })
     if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Backend connection") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(value = base, onValueChange = { base = it }, label = { Text("HTTPS backend URL") }, singleLine = true)
@@ -104,14 +124,37 @@ private fun NovaApp(settings: SecureSettings) {
 @Composable private fun DashboardCard(title: String, message: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) { Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, title, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp)); Column { Text(title, fontWeight = FontWeight.SemiBold); Text(message, style = MaterialTheme.typography.bodySmall) } } } }
 
 private val http = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
-private fun sendMessage(base: String, token: String, text: String): String {
+private data class ChatResult(val response: String, val conversationId: String)
+private fun checkedBase(base: String, token: String): String {
     if (!base.startsWith("https://")) throw IOException("Backend URL must use HTTPS")
     if (token.isBlank()) throw IOException("Configure a scoped NOVA API token in Settings")
-    val payload = JSONObject().put("message", text).toString().toRequestBody("application/json".toMediaType())
-    val request = Request.Builder().url("${base.trimEnd('/')}/api/v1/assistant/chat").header("Authorization", "Bearer $token").post(payload).build()
+    return base.trimEnd('/')
+}
+private fun sendMessage(base: String, token: String, text: String, conversationId: String?): ChatResult {
+    val root = JSONObject().put("message", text)
+    if (conversationId != null) root.put("conversation_id", conversationId)
+    val payload = root.toString().toRequestBody("application/json".toMediaType())
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/assistant/chat").header("Authorization", "Bearer $token").post(payload).build()
     http.newCall(request).execute().use { response ->
         if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}: ${response.body?.string()?.take(240) ?: "No response body"}")
         val body = response.body?.string() ?: throw IOException("Empty response from NOVA backend")
-        return JSONObject(body).getString("response")
+        val json = JSONObject(body)
+        return ChatResult(json.getString("response"), json.getString("conversation_id"))
+    }
+}
+private fun fetchConversations(base: String, token: String): List<ConversationSummary> {
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/assistant/conversations").header("Authorization", "Bearer $token").get().build()
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}")
+        val array = org.json.JSONArray(response.body?.string() ?: "[]")
+        return (0 until array.length()).map { i -> array.getJSONObject(i).let { ConversationSummary(it.getString("id"), it.getString("title")) } }
+    }
+}
+private fun loadConversation(base: String, token: String, id: String): List<ChatLine> {
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/assistant/conversations/$id").header("Authorization", "Bearer $token").get().build()
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}")
+        val messages = JSONObject(response.body?.string() ?: "{}").getJSONArray("messages")
+        return (0 until messages.length()).mapNotNull { i -> messages.getJSONObject(i).let { item -> when (item.getString("role")) { "user" -> ChatLine(item.getString("content"), true); "assistant" -> ChatLine(item.getString("content"), false); else -> null } } }
     }
 }

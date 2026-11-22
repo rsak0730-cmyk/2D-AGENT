@@ -4,16 +4,16 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from .auth import digest, new_secret, require_admin, require_scope
 from .config import get_settings
 from .db import Base, engine, get_db
-from .models import Agent, ApiKey, Task
+from .models import Agent, ApiKey, Conversation, ConversationMessage, Task
 from .providers import complete
-from .schemas import AgentCreate, AgentView, ChatRequest, ChatResponse, CheckpointUpdate, KeyCreate, KeyView, TaskCreate, TaskView
+from .schemas import AgentCreate, AgentView, ChatRequest, ChatResponse, CheckpointUpdate, ConversationDetail, ConversationView, KeyCreate, KeyView, TaskCreate, TaskView
 
 TASK_STATES = {"RECEIVED", "ANALYZING", "PLANNING", "RECRUITING", "ASSIGNED", "RUNNING", "WAITING_FOR_TOOL", "WAITING_FOR_API", "WAITING_FOR_APPROVAL", "PAUSED", "FAILED", "TESTING", "COMPLETED", "CANCELLED"}
 clients: set[WebSocket] = set()
@@ -55,6 +55,8 @@ def create_api_key(body: KeyCreate, db: Session = Depends(get_db)):
     allowed = {"assistant:read", "assistant:write", "tasks:read", "tasks:write", "agents:read", "agents:write", "office:read", "events:read"}
     if not set(scopes) <= allowed:
         raise HTTPException(422, "One or more API scopes are unsupported")
+    if body.expires_at and (body.expires_at.tzinfo is None or body.expires_at.utcoffset() is None):
+        raise HTTPException(422, "Expiry must include a timezone")
     if body.expires_at and body.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(422, "Expiry must be in the future")
     raw = new_secret(); row = ApiKey(name=body.name, key_hash=digest(raw), scopes=scopes, expires_at=body.expires_at)
@@ -112,9 +114,46 @@ async def update_checkpoint(task_id: str, body: CheckpointUpdate, db: Session = 
     return row
 
 @app.post("/api/v1/assistant/chat", response_model=ChatResponse)
-async def chat(body: ChatRequest, _: ApiKey = Depends(require_scope("assistant:write"))):
-    text, model = await complete(body.message, body.model)
-    return ChatResponse(response=text, provider=get_settings().provider, model=model)
+async def chat(body: ChatRequest, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:write"))):
+    if body.conversation_id:
+        conversation = db.query(Conversation).filter(Conversation.id == body.conversation_id, Conversation.owner_key_id == key.id).first()
+        if conversation is None: raise HTTPException(404, "Conversation not found")
+    else:
+        conversation = Conversation(owner_key_id=key.id, title=body.message[:157] + ("..." if len(body.message) > 157 else ""))
+        db.add(conversation); db.commit(); db.refresh(conversation)
+    previous = (db.query(ConversationMessage).filter(ConversationMessage.conversation_id == conversation.id, ConversationMessage.status == "complete").order_by(ConversationMessage.created_at.desc()).limit(20).all())
+    history = [{"role": item.role, "content": item.content} for item in reversed(previous) if item.role in {"user", "assistant"}]
+    db.add(ConversationMessage(conversation_id=conversation.id, role="user", content=body.message, status="complete"))
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    text, model = await complete(body.message, body.model, history)
+    db.add(ConversationMessage(conversation_id=conversation.id, role="assistant", content=text, model=model, status="complete"))
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return ChatResponse(response=text, provider=get_settings().provider, model=model, conversation_id=conversation.id)
+
+@app.get("/api/v1/assistant/conversations", response_model=list[ConversationView])
+def list_conversations(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:read"))):
+    return db.query(Conversation).filter(Conversation.owner_key_id == key.id).order_by(Conversation.updated_at.desc()).limit(100).all()
+
+@app.get("/api/v1/assistant/conversations/search", response_model=list[ConversationView])
+def search_conversations(q: str = Query(min_length=1, max_length=160), db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:read"))):
+    matching_messages = db.query(ConversationMessage.conversation_id).filter(ConversationMessage.content.ilike(f"%{q}%"))
+    return db.query(Conversation).filter(Conversation.owner_key_id == key.id).filter((Conversation.title.ilike(f"%{q}%")) | Conversation.id.in_(matching_messages)).order_by(Conversation.updated_at.desc()).limit(50).all()
+
+@app.get("/api/v1/assistant/conversations/{conversation_id}", response_model=ConversationDetail)
+def get_conversation(conversation_id: str, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:read"))):
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.owner_key_id == key.id).first()
+    if conversation is None: raise HTTPException(404, "Conversation not found")
+    messages = db.query(ConversationMessage).filter(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.created_at.asc()).all()
+    return {"id":conversation.id, "title":conversation.title, "created_at":conversation.created_at, "updated_at":conversation.updated_at, "messages":messages}
+
+@app.delete("/api/v1/assistant/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:write"))):
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.owner_key_id == key.id).first()
+    if conversation is None: raise HTTPException(404, "Conversation not found")
+    db.query(ConversationMessage).filter(ConversationMessage.conversation_id == conversation.id).delete(synchronize_session=False)
+    db.delete(conversation); db.commit(); return {"deleted":True, "id":conversation_id}
 
 async def publish(event: dict):
     gone = []

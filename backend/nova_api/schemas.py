@@ -57,3 +57,23 @@ class ChatResponse(BaseModel):
     response: str
     provider: str
     model: str
+    conversation_id: str
+
+class MessageView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    role: str
+    content: str
+    model: str | None
+    status: str
+    created_at: datetime
+
+class ConversationView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+class ConversationDetail(ConversationView):
+    messages: list[MessageView]
