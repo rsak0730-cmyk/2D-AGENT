@@ -12,9 +12,11 @@ from .auth import digest, new_secret, require_admin, require_scope
 from .config import get_settings
 from .db import Base, engine, get_db
 from .credentials import decrypt_secret, encrypt_secret
-from .models import Agent, ApiKey, Conversation, ConversationMessage, ProviderCredential, Task
-from .providers import complete, list_models
-from .schemas import AgentCreate, AgentView, ChatRequest, ChatResponse, CheckpointUpdate, ConversationDetail, ConversationView, KeyCreate, KeyView, ProviderConfigurationView, ProviderConnectionTest, ProviderCredentialUpdate, TaskCreate, TaskView
+from .models import ActivityEvent, Agent, ApiKey, Conversation, ConversationMessage, ProviderCredential, ResourceSetting, Task, UsageRecord
+from .providers import list_models
+from .schemas import AgentCreate, AgentUpdate, AgentView, ChatRequest, ChatResponse, CheckpointUpdate, ConversationDetail, ConversationView, KeyCreate, KeyView, ProviderConfigurationView, ProviderConnectionTest, ProviderCredentialUpdate, TaskCreate, TaskView
+from .routing import invoke_owner
+from .workforce import router as workforce_router, set_publisher
 
 TASK_STATES = {"RECEIVED", "ANALYZING", "PLANNING", "RECRUITING", "ASSIGNED", "RUNNING", "WAITING_FOR_TOOL", "WAITING_FOR_API", "WAITING_FOR_APPROVAL", "PAUSED", "FAILED", "TESTING", "COMPLETED", "CANCELLED"}
 clients: set[WebSocket] = set()
@@ -129,42 +131,55 @@ def clear_provider_configuration(db: Session = Depends(get_db), key: ApiKey = De
     return {"configured":bool(get_settings().provider_api_key), "key_source":"backend_environment" if get_settings().provider_api_key else "not_configured"}
 
 @app.post("/api/v1/agents", response_model=AgentView)
-def create_agent(body: AgentCreate, db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("agents:write"))):
-    row = Agent(**body.model_dump()); db.add(row); db.commit(); db.refresh(row); return row
+def create_agent(body: AgentCreate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:write"))):
+    row = Agent(owner_key_id=key.id, **body.model_dump()); db.add(row); db.commit(); db.refresh(row); return row
 
 @app.get("/api/v1/agents", response_model=list[AgentView])
-def list_agents(db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("agents:read"))):
-    return db.query(Agent).order_by(Agent.created_at.desc()).all()
+def list_agents(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:read"))):
+    return db.query(Agent).filter(Agent.owner_key_id == key.id).order_by(Agent.created_at.asc()).all()
+
+@app.put("/api/v1/agents/{agent_id}", response_model=AgentView)
+def update_agent(agent_id: str, body: AgentUpdate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:write"))):
+    row = db.query(Agent).filter(Agent.id == agent_id, Agent.owner_key_id == key.id).first()
+    if row is None: raise HTTPException(404, "Agent not found")
+    for field, value in body.model_dump().items(): setattr(row, field, value)
+    db.commit(); db.refresh(row)
+    db.add(ActivityEvent(owner_key_id=key.id, agent_id=row.id, event_type="agent.updated", payload={"identity":row.identity})); db.commit()
+    return row
 
 @app.delete("/api/v1/agents/{agent_id}")
-def remove_agent(agent_id: str, db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("agents:write"))):
-    row = db.get(Agent, agent_id)
+def remove_agent(agent_id: str, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:write"))):
+    row = db.query(Agent).filter(Agent.id == agent_id, Agent.owner_key_id == key.id).first()
     if row is None: raise HTTPException(404, "Agent not found")
     db.delete(row); db.commit(); return {"deleted": True, "id": agent_id}
 
 @app.post("/api/v1/tasks", response_model=TaskView)
-def create_task(body: TaskCreate, db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("tasks:write"))):
-    row = Task(**body.model_dump()); db.add(row); db.commit(); db.refresh(row); return row
+def create_task(body: TaskCreate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("tasks:write"))):
+    row = Task(owner_key_id=key.id, **body.model_dump()); db.add(row); db.commit(); db.refresh(row)
+    db.add(ActivityEvent(owner_key_id=key.id, task_id=row.id, event_type="task.created", payload={"state":row.state,"priority":row.priority})); db.commit()
+    return row
 
 @app.get("/api/v1/tasks", response_model=list[TaskView])
-def list_tasks(db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("tasks:read"))):
-    return db.query(Task).order_by(Task.created_at.desc()).all()
+def list_tasks(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("tasks:read"))):
+    return db.query(Task).filter(Task.owner_key_id == key.id).order_by(Task.priority.asc(), Task.created_at.desc()).limit(200).all()
 
 @app.get("/api/v1/tasks/{task_id}", response_model=TaskView)
-def get_task(task_id: str, db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("tasks:read"))):
-    row = db.get(Task, task_id)
+def get_task(task_id: str, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("tasks:read"))):
+    row = db.query(Task).filter(Task.id == task_id, Task.owner_key_id == key.id).first()
     if row is None: raise HTTPException(404, "Task not found")
     return row
 
 @app.patch("/api/v1/tasks/{task_id}/checkpoint", response_model=TaskView)
-async def update_checkpoint(task_id: str, body: CheckpointUpdate, db: Session = Depends(get_db), _: ApiKey = Depends(require_scope("tasks:write"))):
-    row = db.get(Task, task_id)
+async def update_checkpoint(task_id: str, body: CheckpointUpdate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("tasks:write"))):
+    row = db.query(Task).filter(Task.id == task_id, Task.owner_key_id == key.id).first()
     if row is None: raise HTTPException(404, "Task not found")
     row.state = body.state; row.checkpoint = body.checkpoint
     if body.assigned_agent_id is not None:
-        if db.get(Agent, body.assigned_agent_id) is None: raise HTTPException(422, "Assigned agent does not exist")
+        agent = db.query(Agent).filter(Agent.id == body.assigned_agent_id, Agent.owner_key_id == key.id).first()
+        if agent is None: raise HTTPException(422, "Assigned agent does not exist")
         row.assigned_agent_id = body.assigned_agent_id
     db.commit(); db.refresh(row)
+    db.add(ActivityEvent(owner_key_id=key.id, task_id=row.id, agent_id=row.assigned_agent_id, event_type="task.updated", payload={"state":row.state})); db.commit()
     await publish({"type":"task.updated", "task_id":row.id, "state":row.state, "updated_at":row.updated_at.isoformat()})
     return row
 
@@ -181,14 +196,7 @@ async def chat(body: ChatRequest, db: Session = Depends(get_db), key: ApiKey = D
     db.add(ConversationMessage(conversation_id=conversation.id, role="user", content=body.message, status="complete"))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
-    stored_provider = db.query(ProviderCredential).filter(ProviderCredential.owner_key_id == key.id).first()
-    if stored_provider:
-        provider_key = decrypt_secret(stored_provider.encrypted_api_key)
-        provider_name, selected_model = stored_provider.provider, body.model or stored_provider.model_id
-    else:
-        provider_key = get_settings().provider_api_key or None
-        provider_name, selected_model = get_settings().provider, body.model or get_settings().model
-    text, model = await complete(body.message, selected_model, history, api_key=provider_key)
+    text, provider_name, model = await invoke_owner(db, key, body.message, body.model, history)
     db.add(ConversationMessage(conversation_id=conversation.id, role="assistant", content=text, model=model, status="complete"))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -237,3 +245,6 @@ async def events(ws: WebSocket, db: Session = Depends(get_db)):
         while True: await ws.receive_text()
     except WebSocketDisconnect:
         clients.discard(ws)
+
+set_publisher(publish)
+app.include_router(workforce_router)

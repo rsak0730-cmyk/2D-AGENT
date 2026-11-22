@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -9,7 +10,9 @@ class Settings(BaseSettings):
     provider_base_url: str = "https://api.arena.ai/v1"
     provider_api_key: str = ""
     model: str = "coding-router-preview"
-    request_timeout_seconds: float = 45.0
+    request_timeout_seconds: float = Field(default=45.0, ge=1, le=300)
+    max_completion_tokens: int = Field(default=2048, ge=1, le=32768)
+    max_prompt_characters: int = Field(default=60000, ge=1000, le=1000000)
     credential_encryption_key: str = ""
 
 @lru_cache

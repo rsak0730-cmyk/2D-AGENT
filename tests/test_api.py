@@ -1,4 +1,5 @@
-from backend.nova_api import main
+from types import SimpleNamespace
+from backend.nova_api import routing
 from conftest import auth_key, client
 
 def test_health_does_not_require_provider():
@@ -24,9 +25,6 @@ def test_tasks_checkpoint_and_persistence():
     assert client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["state"] == "PAUSED"
 
 def test_chat_fails_closed_without_credentials(monkeypatch):
-    from fastapi import HTTPException
-    async def missing(*args, **kwargs):
-        raise HTTPException(503, "No AI provider key configured")
-    monkeypatch.setattr(main, "complete", missing)
+    monkeypatch.setattr(routing, "get_settings", lambda: SimpleNamespace(provider_api_key="", provider="arena", model="model-x", provider_base_url="https://arena.test/v1"))
     response = client.post("/api/v1/assistant/chat", headers=auth_key(["assistant:write"]), json={"message":"hello"})
     assert response.status_code == 503

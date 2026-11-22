@@ -1,64 +1,62 @@
 # NOVA
 
-NOVA is an Android AI assistant backed by a modular API. This repository is an **early, testable foundation**, not the complete workforce vision in the master brief. The current implementation intentionally reports unavailable capabilities rather than returning fake AI answers or showing fake agent activity.
+NOVA is an Android AI workspace with a FastAPI backend. This branch adds the first executable, owner-scoped Head Manager + ten-worker slice without replacing the existing assistant, conversation history, provider-key flow, navigation, or pixel-art plans. The actual repository previously had no pixel-art renderer; Headquarters now shows persisted backend events and does not fake character activity.
 
-## What works in this checkpoint
+## Current functionality
 
-- Kotlin/Jetpack Compose Android app shell with Home, Assistant, Headquarters, Agents, Tasks and Settings navigation.
-- HTTPS backend URL and scoped API token settings encrypted at rest using Android Keystore; the API token is not committed or embedded in the APK.
-- FastAPI REST/OpenAPI server with health check, hashed scoped API keys, key revocation, per-key isolated persistent conversations with history/search/delete, agent identity records, task records and checkpoint updates.
-- An actual provider request adapter for Arena's documented OpenAI-compatible API. Users can paste an Arena key into the mobile AI Provider setup; the app sends it over HTTPS to the backend, which encrypts it at rest per scoped NOVA key. Backend environment configuration remains supported. Without a provider key, chat reports a clear error rather than fabricating a reply.
-- Authenticated WebSocket task update events and a deterministic tested A* pathfinder library.
-- PostgreSQL Docker Compose configuration, SQL schema baseline, test suites and GitHub Actions workflows for backend CI and Android debug APK artifact builds.
+- Android Compose Home, Assistant, Headquarters, Agents, Tasks, and Settings screens; backend URL/token encryption remains Android Keystore-backed.
+- Assistant and conversation history/search/delete using a real provider response; no provider response is fabricated when credentials or service are unavailable.
+- Per-NOVA-token provider registry for Arena, Groq, Gemini, OpenRouter, and Cloudflare Workers AI. Provider keys are Fernet-encrypted on the backend. Exact models are discovered through provider APIs; fallback is finite and records provider/latency/status metadata.
+- Per-token seedable workforce of one Head Manager plus ten distinct configured roles. Agents have independent identity, provider/model, prompt, specialties, temperature/context settings, memory toggle, priority/critical markers, duration settings, status, and tool-permission metadata.
+- Owner-scoped tasks and a real API-triggered execution path: model-generated manager plans are parsed and validated; worker assignments/reports and manager synthesis persist. Invalid plans and provider failures remain failed; there is no placeholder success. Tasks run serially in the API request, not via a hidden background service.
+- Agent-to-agent message records, bounded notes for agent/project/headquarters memory, request-budget controls, usage/activity records, authenticated WebSocket events, and admin infrastructure summary.
+- PostgreSQL schema migrations and mock-provider test coverage; the deterministic A* utility remains independent of model calls.
 
-## Not implemented yet
+## Scope and limitations (read before deployment)
 
-There is no autonomous task worker, agent execution loop, multi-agent orchestration, vector/long-term memory, MCP connector engine, office renderer/editor, voice flow, reminder scheduler, telephony receptionist, API dashboard, distributed rate limiter, or deployed backend. Conversations are persisted and searchable, but task state/checkpoint endpoints only store records; they do not run jobs. Read [progress](docs/PROGRESS.md) and the [architecture](docs/ARCHITECTURE.md) for exact boundaries.
+This is **not** yet a resilient distributed agent platform. There is no independent durable queue worker, cross-process task lease, crash-safe automatic resume, parallel subtask execution, horizontal-safe websocket/event broker, vector memory, MCP/tool runtime, pixel-art renderer, approval workflow for tools, browser/shell/filesystem access, production deployment, or live real-provider acceptance test. The current UI's resource/event view is scoped to its NOVA token; the separate administrator infrastructure endpoint requires the backend admin token. Do not host publicly without TLS, a trusted reverse proxy, shared rate limiting, migration/backups, secret rotation, and a worker lease design.
+
+Provider free access and limits vary by account, model, and date; see [Provider notes](docs/PROVIDERS.md). Cloudflare documents a free allocation of 10,000 Neurons/day, not a fixed request/token quota. NOVA does not promise unlimited or universal free inference, and it does not infer prices. 402 billing errors are not retried onto another provider.
 
 ## Run backend locally
 
-Requires Python 3.11+. From repository root:
+Requires Python 3.11+. From the repository root:
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
 pip install -r backend/requirements.txt
 cp .env.example .env
-# Edit .env: set NOVA_ADMIN_TOKEN. For mobile provider-key entry also set NOVA_CREDENTIAL_ENCRYPTION_KEY.
-set -a
-. ./.env
-set +a
+# Set unique NOVA_ADMIN_TOKEN and (for stored provider keys) NOVA_CREDENTIAL_ENCRYPTION_KEY.
+python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+set -a; . ./.env; set +a
 cd backend
 uvicorn nova_api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The local default uses SQLite and creates the current development tables automatically. Open `http://localhost:8000/docs` for interactive OpenAPI. Create a scoped app key using the admin secret:
+Create an app token with only necessary scopes. For all current screens and features, the common scope set is `assistant:read`, `assistant:write`, `providers:read`, `providers:write`, `tasks:read`, `tasks:write`, `agents:read`, `agents:write`, and `events:read`. Use narrower scopes if a device does not need every feature. Create tokens with the `NOVA_ADMIN_TOKEN` endpoint `/api/v1/admin/api-keys`; the raw token is returned once and only its digest is stored.
 
-```sh
-curl -X POST http://localhost:8000/api/v1/admin/api-keys \
-  -H "Authorization: Bearer $NOVA_ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Android phone","scopes":["assistant:read","assistant:write","providers:read","providers:write","tasks:read","tasks:write","agents:read","agents:write","events:read"]}'
-```
+To set up the roster: `POST /api/v1/agents/seed`. Add a provider connection using `POST /api/v1/providers/connections`, then test it with `POST /api/v1/providers/connections/{id}/test`; select one of the exact returned model IDs per agent. Create a task using `POST /api/v1/tasks`, then explicitly execute using `POST /api/v1/tasks/{id}/execute`. The mobile Agents/Tasks screens provide the same operations. Interactive API reference: `/docs`.
 
-Save the one-time `key` value securely; the server stores only its SHA-256 digest. For API security, do not expose the development server directly to the public internet; use HTTPS and a deployment proxy.
+SQLite is the local default and `create_all` initializes new development databases. It does **not** migrate an existing SQLite DB. PostgreSQL deployments must apply migrations in order, including `database/migrations/0003_workforce.sql`; see `docs/DATABASE.md`. SQLite/PostgreSQL backups contain personal conversation/task data and must be protected.
 
-### PostgreSQL via Compose
+### PostgreSQL Compose
 
-Set `POSTGRES_PASSWORD` and `NOVA_ADMIN_TOKEN` in your local, untracked `.env`; also set `NOVA_CREDENTIAL_ENCRYPTION_KEY` if using mobile provider-key entry. Generate that key with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`. Then run `docker compose up --build`. The development app's SQLAlchemy `create_all` initializes current tables on startup; the SQL files in `database/migrations/` are baselines for managed databases, not yet an automated migration runner. Compose port 8000 is plain HTTP for local use only.
+Set `POSTGRES_PASSWORD`, `NOVA_ADMIN_TOKEN`, and `NOVA_CREDENTIAL_ENCRYPTION_KEY` in a local untracked `.env`; run `docker compose up --build`. Compose serves plain HTTP for local development only. Use HTTPS before sending keys from an Android device.
 
-## Run tests
+## Verification
 
 ```sh
 python -m pip install -r backend/requirements.txt
 python -m pytest -q tests
 ```
 
-## Android
+Tests use synthetic keys and HTTP mocks, and never call paid provider APIs. Live provider integration checks are not possible without user-provided provider credentials. This sandbox has no local Gradle/JDK/Android SDK; Android compilation must be verified by GitHub Actions. Android Studio users can run `:app:testDebugUnitTest`, `:app:lintDebug`, and `:app:assembleDebug` with JDK 17/SDK 35.
 
-Open this repository in Android Studio with JDK 17 and Android SDK 35. Run `:app:testDebugUnitTest`, `:app:lintDebug`, `:app:assembleDebug`. Configure a deployed HTTPS NOVA API URL and a scoped API token in Settings. The app requires no AI credential to launch; real responses require an Arena key configured either in backend environment or from the mobile AI Provider form (with `NOVA_CREDENTIAL_ENCRYPTION_KEY` configured server-side).
+## Security and operator notes
 
-The `Android Debug APK` GitHub Actions workflow on `main`, pull requests and manual dispatch builds and uploads `nova-debug-apk`. PR #1 produced a successful Android build and a 16,448,412-byte APK artifact on 2026-11-22: [workflow run](https://github.com/rsak0730-cmyk/2D-AGENT/actions/runs/45045951618). The artifact is available for 14 days. This sandbox lacks JDK/SDK, and the APK was not downloaded or installed on a physical device here; compilation and artifact existence passed, device runtime remains unverified.
-
-## Roadmap and security
-
-See [docs/PROGRESS.md](docs/PROGRESS.md), [API setup](docs/API_SETUP_GUIDE.md), [security](docs/SECURITY.md) and [contributing](CONTRIBUTING.md). Provider credentials belong in backend environment/secrets manager or the encrypted per-token backend credential store; never embed them in the APK. Back up `NOVA_CREDENTIAL_ENCRYPTION_KEY` securely because losing it makes stored mobile-entered credentials undecryptable. Do not use this early foundation to host untrusted code or arbitrary tool execution.
+- Provider keys stay backend-side, encrypted with a stable, separately backed-up `NOVA_CREDENTIAL_ENCRYPTION_KEY`. The mobile provider form transmits them over the configured HTTPS backend; they are not stored in Android preferences/APK.
+- Do not add secrets to source, logs, tests, or issue reports. Revoke a provider key at its source when deleting a NOVA connection.
+- The executor calls only configured model APIs. Agent tool permissions are explicit metadata, but no tool runtime exists and no arbitrary host command can be run.
+- Provider request ceilings and owner daily request budgets are enforced. Token reporting depends on provider response usage metadata; costs are intentionally not guessed.
+- Read [architecture](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [providers](docs/PROVIDERS.md), [progress](docs/PROGRESS.md), and the database upgrade notes.

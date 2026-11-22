@@ -1,29 +1,25 @@
-# NOVA implementation progress — 2026-11-22
+# NOVA progress and verification
 
-Updated: 2026-11-22
+## Implemented and verified in this branch (workforce phase)
 
-## Phase status
-- [x] Phase 1 foundation: Android Compose shell, FastAPI API, SQLite/PostgreSQL connection support, schema baseline, scoped API keys, task/agent CRUD, checkpoint records, provider adapter, office A* utility, CI workflows and starter docs. Backend tests pass; Android compile/lint/debug APK are verified by GitHub CI (device runtime not verified).
-- [~] Phase 2 (in progress): per-key conversations/history/search and Android UI; Android Arena-key entry with backend-side encryption and connectivity testing now implemented. Long-term memory, multiple provider adapters, provider usage/cost UI and resilient client history state remain.
-- [ ] Phase 3 actual bounded task worker, orchestration, tools, resumable execution, agent-to-agent communications.
-- [ ] Phase 4 living pixel-art office renderer, backend-driven animation, editor and sleep/resume integration.
-- [ ] Phase 5 MCP client/connector builder and capability-level authorization.
-- [ ] Phase 6 NOVA API operations expansion, key dashboard, audit, distributed rate limiting and WebSocket auth hardening.
-- [ ] Phase 7 voice, reminders, background automation and supported phone interfaces.
-- [ ] Phase 8 production security, full tests, release, deployment and docs validation.
+- [x] Owner-scoped persistent 11-agent roster seed and individual model/instructions configuration.
+- [x] Encrypted provider registry for Arena, Groq, Gemini OpenAI-compatible, OpenRouter, and Cloudflare Workers AI; model catalog discovery; priority fallback; bounded error behavior.
+- [x] Persisted task states, manager-generated JSON delegation validation, worker assignments/results, final manager synthesis, explicit retry limit, usage records, and failures that remain failures.
+- [x] Explicit saved agent/project/headquarters notes, owner-isolated agent messages, resource/request budgets, authenticated event history, mobile agent/task setup, and live persisted-event Headquarters feed.
+- [x] PostgreSQL migration 0003 and mock-provider tests for encryption, routing fallback, delegation success, invalid planning, roster idempotence, and memory isolation.
 
-## Verified in this checkpoint
-- Repository metadata checked via GitHub API for the supplied open-source projects (default branches, reported SPDX licenses where available, archived status and descriptions); selected FastAPI, SQLAlchemy, official Android Compose approach, and deterministic A* utility. This was not a full source, security-advisory, or maintenance-history audit. No application was copied wholesale.
-- Read current Arena API docs: OpenAI-compatible base `https://api.arena.ai/v1`, model listing endpoint `/v1/models`, documented router ID `coding-router-preview`, provider rate-limit handling and balance notes.
-- Read Android WorkManager, Telecom CallScreeningService and MCP SDK/Apps docs.
-- Implemented backend auth/key hashing/revocation/scopes, create/list/delete agents, task create/list/detail/checkpoint, health and an actual Arena-compatible chat call which errors clearly when unconfigured.
-- Implemented per-key-owned persistent conversations, bounded last-20-turn provider context, conversation list/search/read/delete endpoints and Android history selection UI.
-- Implemented Android Compose navigation shell, encrypted local connection settings using Android Keystore, actual backend chat client and history UI; no API keys are needed just to launch.
-- Backend/A* suite currently passes 16 tests, including encryption/isolation for mobile-entered provider credentials. OpenAPI includes the provider-settings routes; a fresh smoke check is part of the follow-up verification.
-- Both GitHub Actions workflows passed on PR #1. Android CI successfully ran unit-test task, lint and debug assembly, asserted APK existence, and uploaded a 16,448,412-byte `nova-debug-apk` artifact (14-day retention). Successful run: https://github.com/rsak0730-cmyk/2D-AGENT/actions/runs/45045951618.
+Current backend test count is recorded from the latest actual test run below; Android is only verified after the Android Actions workflow completes. Real-provider integration is not verified because this environment has no provider credentials.
 
-## Known blockers / scope honesty
-- This workspace lacks Java, Gradle and Android SDK, so local Android compilation is unavailable. GitHub CI built and verified a non-empty debug APK, but it was not installed or launched on a physical device.
-- No automatic task execution worker exists yet. Task API currently persists task states and checkpoints only; agent records are identities only, not LLM workers.
-- No user provider credential was supplied or tested against a live Arena account. Chat requires either a server `NOVA_PROVIDER_API_KEY` or an Arena key saved in the mobile provider form; the mobile flow also requires backend encryption-key setup and a NOVA token with provider scopes.
-- Production OAuth/MCP connectors, voice, long-term/vector memory, UI office simulation, scheduler, telephony and hosted deployment remain unimplemented.
+## Known boundaries — do not claim complete
+
+- Task execution is synchronously triggered by an API request and delegates serially. There is no independent durable worker, background queue, safe parallel subtask execution, multi-process locking/leases, crash recovery, cancellation, or horizontal scaling. Concurrency settings are persisted but do not create parallel workers.
+- Provider token counts are recorded as zero where the provider usage metadata is not consumed; costs are not guessed. Provider and owner request ceilings are enforced, provider-level quotas remain authoritative.
+- Memory is keyword/text notes, not vector search. Project memory is not automatically injected into task prompts. Tool permissions are metadata; no tools, shell, MCP, external action, or approval-gated operation is implemented.
+- Headquarters is event-backed status/activity, not pixel art. This baseline repo had no existing sprite renderer to preserve/extend.
+- Admin infrastructure endpoint uses the backend bootstrap secret and reports this process' DB/task/provider/usage counts; it is not a distributed cluster monitor.
+- PostgreSQL migration is manual; existing SQLite databases are not migrated by `create_all`.
+- Free tier/usage is provider/account/model-dependent. Current provider documentation and limitations are in `docs/PROVIDERS.md`; no live provider test is run in CI.
+
+## Last known previous baseline
+
+Before workforce changes, commit `29bc630` passed 16 backend tests, and Android/backend CI runs `45050141556`/`45050141594` passed. Those checks apply to that baseline, not to this unverified patch. See the current PR checks for updated outcomes.

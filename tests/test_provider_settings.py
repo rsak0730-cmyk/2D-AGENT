@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from backend.nova_api import credentials, main
+from backend.nova_api import credentials, main, routing
 from conftest import TestingSession, auth_key, client
 from backend.nova_api.auth import digest
 from backend.nova_api.models import ApiKey, ProviderCredential
@@ -23,11 +23,11 @@ def test_mobile_provider_key_is_encrypted_isolated_and_used(monkeypatch):
     async def fake_models(api_key):
         calls["test_key"] = api_key
         return ["coding-router-preview", "model-z"]
-    async def fake_complete(message, model=None, history=None, api_key=None, base_url=None):
+    async def fake_complete(message, model=None, history=None, api_key=None, base_url=None, **kwargs):
         calls.update({"chat_key":api_key, "model":model})
-        return "reply from provider", model
+        return "reply from provider", model, 3, 2
     monkeypatch.setattr(main, "list_models", fake_models)
-    monkeypatch.setattr(main, "complete", fake_complete)
+    monkeypatch.setattr(routing, "complete_detailed", fake_complete)
     tested = client.post("/api/v1/settings/provider/test", headers=owner)
     assert tested.status_code == 200 and tested.json()["models_available"] == 2
     answer = client.post("/api/v1/assistant/chat", headers=owner, json={"message":"hello"})

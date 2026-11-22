@@ -1,13 +1,14 @@
-from fastapi.testclient import TestClient
-from backend.nova_api import main
+from types import SimpleNamespace
+from backend.nova_api import routing
 from conftest import auth_key, client
 
 def test_conversation_history_search_and_key_isolation(monkeypatch):
     observed = []
     async def fake_completion(message, model=None, history=None, **kwargs):
         observed.append(history or [])
-        return f"reply:{message}", "test-model"
-    monkeypatch.setattr(main, "complete", fake_completion)
+        return f"reply:{message}", "test-model", 3, 2
+    monkeypatch.setattr(routing, "complete_detailed", fake_completion)
+    monkeypatch.setattr(routing, "get_settings", lambda: SimpleNamespace(provider_api_key="synthetic", provider="arena", model="test-model", provider_base_url="https://arena.test/v1"))
     owner = auth_key(["assistant:read", "assistant:write"])
     first = client.post("/api/v1/assistant/chat", headers=owner, json={"message":"Remember the blue bicycle"})
     assert first.status_code == 200, first.text

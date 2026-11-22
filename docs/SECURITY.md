@@ -1,7 +1,18 @@
-# Security notes and limits
+# Security posture
 
-Implemented: provider secrets may be supplied by backend env or mobile setup; mobile-submitted Arena keys travel over HTTPS and are Fernet-encrypted at rest per scoped NOVA API key using a backend-only `NOVA_CREDENTIAL_ENCRYPTION_KEY`; the provider key is not persisted in Android preferences or included in the APK. Phone stores its NOVA bearer key encrypted using Android Keystore AES-GCM. API bearer keys are high-entropy values returned once and SHA-256 hashed in DB; scope checks, revocation, basic per-IP process-local rate limit, input length/schema validation, no upstream response-body reflection, and HTTPS-only Android backend URL are present.
+NOVA remains an early-stage, not production-ready application. Do not expose the development server or send sensitive production data until you deploy TLS, shared gateway rate limits, database migration/backup controls, secret-manager storage/rotation, and a durable worker design.
 
-Not yet implemented/verified: user identity/login and tenant isolation, encrypted provider credentials at rest beyond secret-manager deployment, audit log, distributed rate limit, TLS deployment configuration, backups/restore, API key management dashboard, security scan, agent permission matrix, approval workflow, prompt-injection defenses, connector sandbox and production threat model. Current admin token is a global bootstrap credential. Compose uses local plain HTTP. Do not deploy this code to the public internet as-is.
+## Added workforce controls
 
-Android blocks cleartext backend URLs; Android Keystore contents are app-specific but reset/uninstall semantics apply. Protect scoped keys and revoke lost-device keys. The Android example disables backup. Provider keys must never be placed in build configuration or returned to clients. External calls and actions require explicit human approval before the product exposes them.
+- API keys are hashed at rest and scopes are enforced on every user API. Agents, tasks, memories, provider connections, usage and events are filtered by `owner_key_id`; cross-owner IDs return not found.
+- Provider API secrets are Fernet-encrypted at rest using `NOVA_CREDENTIAL_ENCRYPTION_KEY`, never returned in API views, and never stored on Android. Secrets must be supplied only over HTTPS. Key loss makes ciphertext unrecoverable; back up separately. Revocation at the provider is still necessary when removing a stored key.
+- Provider endpoints are fixed by provider identity (Arena configured base, known OpenAI-compatible endpoints, or Cloudflare account-specific endpoint); the client cannot submit a URL, reducing SSRF risk. Model IDs come from owner-authenticated model discovery.
+- Router retries/fallback are finite. 402 billing errors stop. Provider bodies are not reflected in error responses. Per-connection and owner request budgets are checked before calls; provider-specific rate and spend controls remain authoritative.
+- Task plans are constrained to known role IDs, a maximum of five unique text-only assignments, and persisted assignment status. No tool runtime is exposed, no host shell is invoked, and tool-permission metadata defaults empty. Provider output and memory are untrusted text; no instruction from them is executed as a host action.
+- The admin infrastructure API requires `NOVA_ADMIN_TOKEN`; it is not accessible with ordinary scoped API credentials.
+
+## Remaining production gaps
+
+Task execution runs synchronously in the API process; a crash or horizontal scale can cause orphaned/inconsistent work. There are no leases/idempotency protections for multi-instance workers, durable queue, separate event broker, approval workflow, user-configurable retention/deletion for all task audit data, abuse controls by account, or production deployment. The per-process request rate limiter and WebSocket registry do not scale. Review `docs/ARCHITECTURE.md` before operating this branch.
+
+Never commit provider keys, API tokens, admin secrets, encryption keys, user conversations, local DB files, or backups. Use synthetic test secrets and mocked provider HTTP responses.
