@@ -50,6 +50,7 @@ private data class WorkforceAgent(val id: String, val identity: String, val name
 private data class WorkforceTask(val id: String, val title: String, val state: String, val result: String?, val error: String?, val priority: Int)
 private data class OfficeEvent(val type: String, val agentId: String?, val taskId: String?, val createdAt: String, val payload: String)
 private data class ProviderConnectionInfo(val id: String, val provider: String, val models: List<String>, val priority: Int, val status: String)
+private data class WorkforceSnapshot<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Agents"), TASKS("Tasks"), SETTINGS("Settings") }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -417,7 +418,7 @@ private fun authorizedRequest(base: String, token: String, path: String, method:
     }
 }
 
-private fun loadWorkforce(base: String, token: String): Quad<List<WorkforceAgent>, List<WorkforceTask>, List<OfficeEvent>, List<ProviderConnectionInfo>> {
+private fun loadWorkforce(base: String, token: String): WorkforceSnapshot<List<WorkforceAgent>, List<WorkforceTask>, List<OfficeEvent>, List<ProviderConnectionInfo>> {
     val agentsJson = org.json.JSONArray(authorizedRequest(base, token, "/api/v1/agents"))
     val agents = (0 until agentsJson.length()).map { i ->
         val item = agentsJson.getJSONObject(i)
@@ -429,10 +430,9 @@ private fun loadWorkforce(base: String, token: String): Quad<List<WorkforceAgent
     val events = (0 until eventsJson.length()).map { i -> eventsJson.getJSONObject(i).let { OfficeEvent(it.optString("event_type", "event"), it.optString("agent_id").takeIf { value -> value.isNotBlank() && value != "null" }, it.optString("task_id").takeIf { value -> value.isNotBlank() && value != "null" }, it.optString("created_at"), it.optJSONObject("payload")?.toString() ?: "{}") } }
     val providerJson = org.json.JSONArray(authorizedRequest(base, token, "/api/v1/providers/connections"))
     val connections = (0 until providerJson.length()).map { i -> providerJson.getJSONObject(i).let { ProviderConnectionInfo(it.getString("id"), it.optString("provider"), jsonStrings(it.optJSONArray("models")), it.optInt("priority", 100), it.optString("status", "not_tested")) } }
-    return Quad(agents, tasks, events, connections)
+    return WorkforceSnapshot(agents, tasks, events, connections)
 }
 
-private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 private fun jsonStrings(array: org.json.JSONArray?): List<String> = if (array == null) emptyList() else (0 until array.length()).map { array.optString(it) }.filter { it.isNotBlank() }
 
 private fun seedAgentRoster(base: String, token: String): List<WorkforceAgent> {
