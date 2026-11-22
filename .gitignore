@@ -1,0 +1,25 @@
+# Secrets and local state
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite*
+*.jks
+*.keystore
+local.properties
+
+# Generated outputs
+.gradle/
+build/
+**/build/
+.idea/
+*.iml
+*.apk
+*.aab
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+.DS_Store

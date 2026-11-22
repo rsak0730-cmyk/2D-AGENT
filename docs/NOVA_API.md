@@ -1,0 +1,5 @@
+# NOVA API (current)
+
+FastAPI serves OpenAPI at `/openapi.json` and Swagger at `/docs`. API version prefix is `/api/v1`. Implemented operations: admin create/list/revoke scoped NOVA keys; create/list/delete agents; create/list/read tasks; update a task checkpoint/state; call the configured provider-backed chat completion; authenticated WebSocket `/api/v1/events` broadcasts task checkpoint updates. `/health` checks database connectivity and whether provider credentials are configured.
+
+All assistant/task/agent endpoints use scopes. Current key scopes: `assistant:read`, `assistant:write`, `tasks:read`, `tasks:write`, `agents:read`, `agents:write`, `office:read`, `events:read`; unused scopes do not imply capabilities. Key creation/revocation require `NOVA_ADMIN_TOKEN`. Raw key is returned only once and hashed at rest. API limits are process-local only. Tasks are records/checkpoints, not executing jobs. No reminders, automation, project files, API usage history, audit endpoint or mobile key-management UI exists yet. Use HTTPS in production and never treat model-provider quota as NOVA quota.
