@@ -12,22 +12,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
       - name: Validate Android configuration
         run: test -f settings.gradle.kts && test -f app/build.gradle.kts && grep -q 'applicationId = "ai.nova.app"' app/build.gradle.kts
       - name: Test, lint, and build debug APK
-        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+        shell: bash
+        run: |
+          set +e
+          gradle --no-daemon --stacktrace :app:testDebugUnitTest :app:lintDebug :app:assembleDebug 2>&1 | tee "$RUNNER_TEMP/nova-gradle.log"
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            details=$(tail -n 45 "$RUNNER_TEMP/nova-gradle.log" | awk '{printf "%s ", $0}' | sed 's/%/%25/g; s/:/%3A/g')
+            echo "::error title=Gradle build failure::$details"
+            exit "$result"
+          fi
+      - name: Upload Android build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nova-android-build-log
+          path: ${{ runner.temp }}/nova-gradle.log
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Verify debug APK
         run: test -s app/build/outputs/apk/debug/app-debug.apk
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nova-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
