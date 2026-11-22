@@ -54,7 +54,7 @@ python -m pytest -q tests
 
 Open this repository in Android Studio with JDK 17 and Android SDK 35. Run `:app:testDebugUnitTest`, `:app:lintDebug`, `:app:assembleDebug`. Configure a deployed HTTPS NOVA API URL and a scoped API token in Settings. The starter app requires no AI credential to launch; the backend needs an Arena provider key to produce real cloud AI responses.
 
-The `Android Debug APK` GitHub Actions workflow on `main`, pull requests and manual dispatch builds and uploads `nova-debug-apk`. This checkpoint's workspace did not have a JDK/SDK, so no APK artifact is claimed here.
+The `Android Debug APK` GitHub Actions workflow on `main`, pull requests and manual dispatch builds and uploads `nova-debug-apk`. PR #1 produced a successful Android build and a 16,448,412-byte APK artifact on 2026-11-22: [workflow run](https://github.com/rsak0730-cmyk/2D-AGENT/actions/runs/45045951618). The artifact is available for 14 days. This sandbox lacks JDK/SDK, and the APK was not downloaded or installed on a physical device here; compilation and artifact existence passed, device runtime remains unverified.
 
 ## Roadmap and security
 

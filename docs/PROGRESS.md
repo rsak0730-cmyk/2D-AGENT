@@ -1,9 +1,9 @@
-# NOVA implementation progress — checkpoint 1
+# NOVA implementation progress — 2026-11-22
 
 Updated: 2026-11-22
 
 ## Phase status
-- [~] Phase 1 foundation implemented; Android project remains uncompiled/unverified locally because the required toolchain is absent. Backend foundation is tested.
+- [x] Phase 1 foundation: Android Compose shell, FastAPI API, SQLite/PostgreSQL connection support, schema baseline, scoped API keys, task/agent CRUD, checkpoint records, provider adapter, office A* utility, CI workflows and starter docs. Backend tests pass; Android compile/lint/debug APK are verified by GitHub CI (device runtime not verified).
 - [ ] Phase 2 (in progress): backend conversations/history/search with per-API-key ownership and Android history UI are implemented; long-term memory, provider configuration/health UI and resilient client history state remain.
 - [ ] Phase 3 actual bounded task worker, orchestration, tools, resumable execution, agent-to-agent communications.
 - [ ] Phase 4 living pixel-art office renderer, backend-driven animation, editor and sleep/resume integration.
@@ -20,10 +20,10 @@ Updated: 2026-11-22
 - Implemented per-key-owned persistent conversations, bounded last-20-turn provider context, conversation list/search/read/delete endpoints and Android history selection UI.
 - Implemented Android Compose navigation shell, encrypted local connection settings using Android Keystore, actual backend chat client and history UI; no API keys are needed just to launch.
 - Backend/A* suite currently passes 13 tests; OpenAPI smoke check returns HTTP 200 with 12 paths.
-- Added Android and backend GitHub Actions workflows; workflow has not run in GitHub from this workspace.
+- Both GitHub Actions workflows passed on PR #1. Android CI successfully ran unit-test task, lint and debug assembly, asserted APK existence, and uploaded a 16,448,412-byte `nova-debug-apk` artifact (14-day retention). Successful run: https://github.com/rsak0730-cmyk/2D-AGENT/actions/runs/45045951618.
 
 ## Known blockers / scope honesty
-- This workspace lacks Java, Gradle and Android SDK, so local Android compilation and a debug APK are unavailable here. CI was added but is not a substitute for an executed build.
+- This workspace lacks Java, Gradle and Android SDK, so local Android compilation is unavailable. GitHub CI built and verified a non-empty debug APK, but it was not installed or launched on a physical device.
 - No automatic task execution worker exists yet. Task API currently persists task states and checkpoints only; agent records are identities only, not LLM workers.
 - No API/provider credentials were provided. Arena chat returns 503 until the user configures `NOVA_PROVIDER_API_KEY` server-side.
 - Production OAuth/MCP connectors, voice, long-term/vector memory, UI office simulation, scheduler, telephony and hosted deployment remain unimplemented.
