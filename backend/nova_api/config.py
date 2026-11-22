@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(default=45.0, ge=1, le=300)
     max_completion_tokens: int = Field(default=2048, ge=1, le=32768)
     max_prompt_characters: int = Field(default=60000, ge=1000, le=1000000)
+    gateway_allowed_hosts: str = ""
     credential_encryption_key: str = ""
 
 @lru_cache

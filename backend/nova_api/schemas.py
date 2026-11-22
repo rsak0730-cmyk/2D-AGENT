@@ -20,10 +20,11 @@ class ProviderCredentialUpdate(BaseModel):
     api_key: str | None = None
 
 class ProviderConnectionCreate(BaseModel):
-    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare"]
+    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway"]
     api_key: str = Field(min_length=8, max_length=4096)
     model_ids: list[str] = Field(default_factory=list, max_length=20)
     account_id: str | None = Field(default=None, max_length=160)
+    endpoint: str | None = Field(default=None, max_length=500)
     priority: int = Field(default=100, ge=1, le=10000)
     daily_request_limit: int | None = Field(default=None, ge=1, le=10000000)
     enabled: bool = True
@@ -41,6 +42,13 @@ class ProviderConnectionCreate(BaseModel):
         if info.data.get("provider") == "cloudflare" and (not value or not value.strip()):
             raise ValueError("Cloudflare account ID is required")
         return value.strip() if value else value
+
+    @field_validator("endpoint")
+    @classmethod
+    def gateway_requires_endpoint(cls, value, info):
+        if info.data.get("provider") == "claude_gateway" and (not value or not value.strip()):
+            raise ValueError("Claude Code Gateway base URL is required")
+        return value.strip().rstrip("/") if value else value
 
 class ProviderConnectionView(BaseModel):
     id: str
@@ -70,7 +78,7 @@ class AgentCreate(BaseModel):
     identity: str = Field(default="worker", min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=100)
     job_title: str = Field(default="Assistant", max_length=100)
-    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare"] = "arena"
+    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway"] = "arena"
     model_id: str = Field(default="coding-router-preview", max_length=160)
     specialties: list[str] = Field(default_factory=list, max_length=20)
     instructions: str = Field(default="", max_length=8000)
@@ -86,7 +94,7 @@ class AgentUpdate(BaseModel):
     identity: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=100)
     job_title: str = Field(max_length=100)
-    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare"]
+    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway"]
     model_id: str = Field(max_length=160)
     specialties: list[str] = Field(max_length=20)
     instructions: str = Field(max_length=8000)

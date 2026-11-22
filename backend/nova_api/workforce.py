@@ -29,7 +29,7 @@ def log_event(db, owner_id, event_type, task_id=None, agent_id=None, payload=Non
     return row
 
 def provider_endpoint(row):
-    if row.provider == "cloudflare": return row.endpoint
+    if row.provider in {"cloudflare", "claude_gateway"}: return row.endpoint
     if row.provider == "arena": return row.endpoint or get_settings().provider_base_url
     return None
 
@@ -77,7 +77,16 @@ def list_connections(db: Session = Depends(get_db), key: ApiKey = Depends(requir
 
 @router.post("/api/v1/providers/connections", response_model=ProviderConnectionView)
 def save_connection(body: ProviderConnectionCreate, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("providers:write"))):
-    endpoint = f"https://api.cloudflare.com/client/v4/accounts/{body.account_id}" if body.provider == "cloudflare" else (get_settings().provider_base_url if body.provider == "arena" else "")
+    if body.provider == "claude_gateway":
+        # _base validates HTTPS and the deployment's explicit host allow-list before any outbound call.
+        from .providers import _gateway_base
+        endpoint = _gateway_base(body.endpoint)
+    elif body.provider == "cloudflare":
+        endpoint = f"https://api.cloudflare.com/client/v4/accounts/{body.account_id}"
+    else:
+        if body.endpoint:
+            raise HTTPException(422, "Custom endpoints are only supported for Claude Code Gateway")
+        endpoint = get_settings().provider_base_url if body.provider == "arena" else ""
     row = db.query(ProviderConnection).filter(ProviderConnection.owner_key_id == key.id, ProviderConnection.provider == body.provider).first()
     if row is None:
         row = ProviderConnection(owner_key_id=key.id, provider=body.provider, encrypted_api_key=encrypt_secret(body.api_key.strip()), endpoint=endpoint, account_id=body.account_id, models=body.model_ids, priority=body.priority, daily_request_limit=body.daily_request_limit, enabled=body.enabled)

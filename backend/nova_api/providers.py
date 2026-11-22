@@ -11,6 +11,26 @@ OPENAI_COMPAT = {
 }
 
 
+def _gateway_base(endpoint: str | None) -> str:
+    """Accept only explicitly allow-listed HTTPS gateway origins to prevent SSRF."""
+    from urllib.parse import urlsplit
+    if not endpoint:
+        raise HTTPException(422, "Claude Code Gateway requires an HTTPS base URL")
+    try:
+        parsed = urlsplit(endpoint.strip())
+        port = parsed.port
+    except ValueError:
+        raise HTTPException(422, "Gateway base URL is invalid")
+    allowed = {host.strip().lower() for host in get_settings().gateway_allowed_hosts.split(",") if host.strip()}
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/")
+    if (parsed.scheme != "https" or not host or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or host not in allowed or (port is not None and port != 443)
+            or path != "/v1"):
+        raise HTTPException(422, "Gateway URL must use HTTPS, an allow-listed hostname, and the /v1 path")
+    return endpoint.strip().rstrip("/")
+
+
 def _provider_error(status: int, retry_after: str | None = None) -> HTTPException:
     if status == 429:
         return HTTPException(429, "AI provider rate limit reached", headers={"Retry-After": retry_after or "60"})
@@ -28,6 +48,8 @@ def _base(provider: str, endpoint: str | None = None) -> str:
         if not endpoint or not endpoint.startswith("https://api.cloudflare.com/client/v4/accounts/"):
             raise HTTPException(422, "Cloudflare requires its account-specific API base URL")
         return endpoint.rstrip("/")
+    if provider == "claude_gateway":
+        return _gateway_base(endpoint)
     if provider not in OPENAI_COMPAT:
         raise HTTPException(422, "Unsupported AI provider")
     return OPENAI_COMPAT[provider].rstrip("/")

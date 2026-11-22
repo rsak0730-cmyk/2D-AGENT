@@ -57,6 +57,27 @@ def test_provider_connection_encrypted_and_fallback_is_bounded(monkeypatch):
     assert client.delete(f"/api/v1/providers/connections/{saved['id']}", headers=owner).json()["deleted"] is True
 
 
+def test_gateway_connection_persists_endpoint_and_never_returns_token(monkeypatch):
+    from cryptography.fernet import Fernet
+    from backend.nova_api import workforce, providers
+    encryption_key = Fernet.generate_key().decode()
+    monkeypatch.setattr(credentials, "get_settings", lambda: SimpleNamespace(credential_encryption_key=encryption_key))
+    monkeypatch.setattr(workforce, "get_settings", lambda: SimpleNamespace(gateway_allowed_hosts="gateway.example.test", provider_base_url="https://arena.test/v1"))
+    monkeypatch.setattr(providers, "get_settings", lambda: SimpleNamespace(gateway_allowed_hosts="gateway.example.test", provider_base_url="https://arena.test/v1", request_timeout_seconds=5, max_completion_tokens=100, max_prompt_characters=10000))
+    owner = auth_key(["providers:read", "providers:write"])
+    response = client.post("/api/v1/providers/connections", headers=owner, json={"provider":"claude_gateway", "api_key":"gateway-secret-token", "endpoint":"https://gateway.example.test/v1"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["provider"] == "claude_gateway" and body["account_id"] is None
+    assert "gateway-secret-token" not in response.text
+    db = TestingSession(); row = db.get(ProviderConnection, body["id"])
+    assert row.endpoint == "https://gateway.example.test/v1"
+    assert credentials.decrypt_secret(row.encrypted_api_key) == "gateway-secret-token"
+    db.close()
+    rejected = client.post("/api/v1/providers/connections", headers=owner, json={"provider":"claude_gateway", "api_key":"another-secret-token", "endpoint":"http://127.0.0.1:8090/v1"})
+    assert rejected.status_code == 422
+
+
 def test_manager_delegates_to_real_workers_and_persists_results(monkeypatch):
     from cryptography.fernet import Fernet
     encryption_key = Fernet.generate_key().decode()

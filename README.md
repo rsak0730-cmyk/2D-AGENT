@@ -6,7 +6,7 @@ NOVA is an Android AI workspace with a FastAPI backend. This branch adds the fir
 
 - Android Compose Home, Assistant, Headquarters, Agents, Tasks, and Settings screens; backend URL/token encryption remains Android Keystore-backed.
 - Assistant and conversation history/search/delete using a real provider response; no provider response is fabricated when credentials or service are unavailable.
-- Per-NOVA-token provider registry for Arena, Groq, Gemini, OpenRouter, and Cloudflare Workers AI. Provider keys are Fernet-encrypted on the backend. Exact models are discovered through provider APIs; fallback is finite and records provider/latency/status metadata.
+- Per-NOVA-token provider registry for Arena, Groq, Gemini, OpenRouter, Cloudflare Workers AI, and an opt-in allow-listed Claude Code Gateway adapter. Provider keys and gateway tokens are Fernet-encrypted on the backend. Exact models are discovered through provider APIs; fallback is finite and records provider/latency/status metadata. Gateway connectivity does not provide upstream credentials or free inference.
 - Per-token seedable workforce of one Head Manager plus ten distinct configured roles. Agents have independent identity, provider/model, prompt, specialties, temperature/context settings, memory toggle, priority/critical markers, duration settings, status, and tool-permission metadata.
 - Owner-scoped tasks and a real API-triggered execution path: model-generated manager plans are parsed and validated; worker assignments/reports and manager synthesis persist. Invalid plans and provider failures remain failed; there is no placeholder success. Tasks run serially in the API request, not via a hidden background service.
 - Agent-to-agent message records, bounded notes for agent/project/headquarters memory, request-budget controls, usage/activity records, authenticated WebSocket events, and admin infrastructure summary.
@@ -33,6 +33,8 @@ set -a; . ./.env; set +a
 cd backend
 uvicorn nova_api.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+For the optional Claude Code Gateway adapter, set backend `NOVA_GATEWAY_ALLOWED_HOSTS` to comma-separated exact hostnames (for example `gateway.example.org`); the app then accepts only `https://gateway.example.org/v1`. Never add a broad or untrusted host. Review the self-hosted gateway's own deployment/security guidance and configure an upstream provider.
 
 Create an app token with only necessary scopes. For all current screens and features, the common scope set is `assistant:read`, `assistant:write`, `providers:read`, `providers:write`, `tasks:read`, `tasks:write`, `agents:read`, `agents:write`, and `events:read`. Use narrower scopes if a device does not need every feature. Create tokens with the `NOVA_ADMIN_TOKEN` endpoint `/api/v1/admin/api-keys`; the raw token is returned once and only its digest is stored.
 

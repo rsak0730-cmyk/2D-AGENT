@@ -3,12 +3,13 @@
 ## Implemented and verified in this branch (workforce phase)
 
 - [x] Owner-scoped persistent 11-agent roster seed and individual model/instructions configuration.
-- [x] Encrypted provider registry for Arena, Groq, Gemini OpenAI-compatible, OpenRouter, and Cloudflare Workers AI; model catalog discovery; priority fallback; bounded error behavior.
+- [x] Encrypted provider registry for Arena, Groq, Gemini OpenAI-compatible, OpenRouter, Cloudflare Workers AI, and allow-listed Claude Code Gateway; model catalog discovery; priority fallback; bounded error behavior.
+- [x] Android provider setup center now accepts gateway host/token, describes the self-hosted requirement, displays saved connections with retest/disconnect actions, and avoids claiming model-list success proves inference or a free quota. Gateway endpoint must be HTTPS on an operator allow-list.
 - [x] Persisted task states, manager-generated JSON delegation validation, worker assignments/results, final manager synthesis, explicit retry limit, usage records, and failures that remain failures.
 - [x] Explicit saved agent/project/headquarters notes, owner-isolated agent messages, resource/request budgets, authenticated event history, mobile agent/task setup, and live persisted-event Headquarters feed.
 - [x] PostgreSQL migration 0003 and mock-provider tests for encryption, routing fallback, delegation success, invalid planning, roster idempotence, and memory isolation.
 
-Current backend test count is recorded from the latest actual test run below; Android is only verified after the Android Actions workflow completes. Real-provider integration is not verified because this environment has no provider credentials.
+Latest local backend verification for this in-progress provider phase: `28 passed, 1 skipped, 1 warning` (`.venv/bin/python -m pytest -q tests`). Android verification for this patch is pending GitHub Actions because this sandbox has no JDK/Gradle. Real-provider integration is not verified because this environment has no provider credentials.
 
 ## Known boundaries — do not claim complete
 

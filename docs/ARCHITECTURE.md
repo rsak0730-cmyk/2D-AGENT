@@ -11,12 +11,12 @@ SQLAlchemy persistence: SQLite development / PostgreSQL Compose
   ├─ agent/project/headquarters notes and append-only activity events
   └─ resource and admin infrastructure summaries
 Provider adapters: Arena, Groq, Gemini OpenAI-compatible, OpenRouter,
-                   Cloudflare Workers AI native REST
+                   Cloudflare Workers AI native REST, allow-listed Claude Code Gateway
 ```
 
 ## What runs today
 
-- Eleven role records can be seeded idempotently per NOVA API key. Each record has its own role identity, model/provider selection, prompt, specialties, temperature, context setting, memory toggle, priority, critical marker, task-duration cap, and explicit tool permission list. Model choices are checked against tested provider model IDs in the mobile workflow; the API can still accept configured exact IDs for integrations.
+- Eleven role records can be seeded idempotently per NOVA API key. Each record has its own role identity, model/provider selection, prompt, specialties, temperature, context setting, memory toggle, priority, critical marker, task-duration cap, and explicit tool permission list. The mobile editor offers models returned by provider discovery as selectable suggestions, while exact model IDs remain editable; assignment is not a preflight inference check, and actual provider calls can still reject a selected model.
 - Task execution is explicitly API-triggered. The Head Manager asks a configured real model for a JSON delegation plan; the server validates worker identities and persists assignments before worker calls. Workers produce real provider completions, and the manager receives saved reports for a final synthesis. A provider/plan failure leaves a failed task and does not fabricate a result. The execution loop is **serial within a request**, bounded by the task's configured attempt count, provider request limits, and HTTP timeouts.
 - There is not a separate durable worker daemon, cross-process lease, restart/resume executor, or safe multi-instance scheduler. The API process can be interrupted while a task is in progress; operators must inspect task/assignment state. Do not scale the executor horizontally yet.
 - Agent messages and task lifecycle events persist to SQL and are broadcast to currently connected in-process WebSockets. Event delivery across multiple server instances is not implemented.
@@ -31,6 +31,7 @@ Provider adapters: Arena, Groq, Gemini OpenAI-compatible, OpenRouter,
 - Gemini: `https://generativelanguage.googleapis.com/v1beta/openai`.
 - OpenRouter: `https://openrouter.ai/api/v1`.
 - Cloudflare Workers AI: `https://api.cloudflare.com/client/v4/accounts/{account_id}`, with native `/ai/run/{model}` and account model discovery requests.
+- Claude Code Gateway: opt-in OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`, fixed `/v1` base path, exact HTTPS host allow-list via `NOVA_GATEWAY_ALLOWED_HOSTS`. It is a self-hosted routing layer and requires separately configured upstream provider credentials; it does not grant free or unlimited inference.
 
 Credentials and model catalogs are provider/account specific; adding a connection requires credentials and successful provider model discovery before its returned models become selectable in mobile UI. Free access is not a global guarantee: consult [provider setup and limits](PROVIDERS.md).
 

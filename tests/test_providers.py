@@ -74,3 +74,28 @@ def test_cloudflare_native_chat_and_account_endpoint(monkeypatch):
     result = asyncio.run(providers.complete_detailed("question", "@cf/example/model", api_key="synthetic-secret", provider="cloudflare", account_id="acct-123", base_url="https://api.cloudflare.com/client/v4/accounts/acct-123"))
     assert result == ("native Cloudflare completion", "@cf/example/model", None, None)
     assert str(calls[0].url) == "https://api.cloudflare.com/client/v4/accounts/acct-123/ai/run/@cf/example/model"
+
+
+def test_claude_code_gateway_openai_compat_protocol_and_allow_list(monkeypatch):
+    calls = []
+    transport = httpx.MockTransport(lambda request: (calls.append(request) or httpx.Response(200, json={"data":[{"id":"upstream/model-a"}]} if request.method == "GET" else {"model":"upstream/model-a", "choices":[{"message":{"content":"gateway response"}}], "usage":{"prompt_tokens":3,"completion_tokens":4}})))
+    original_client = httpx.AsyncClient
+    settings = SimpleNamespace(provider_api_key="", provider_base_url="https://provider.test/v1", model="model-x", request_timeout_seconds=5, max_completion_tokens=128, max_prompt_characters=60000, gateway_allowed_hosts="gateway.example.test")
+    monkeypatch.setattr(providers, "get_settings", lambda: settings)
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: original_client(transport=transport, **kwargs))
+    endpoint = "https://gateway.example.test/v1"
+    assert asyncio.run(providers.list_models("gateway-token", endpoint, "claude_gateway")) == ["upstream/model-a"]
+    result = asyncio.run(providers.complete_detailed("hello", "upstream/model-a", api_key="gateway-token", base_url=endpoint, provider="claude_gateway"))
+    assert result == ("gateway response", "upstream/model-a", 3, 4)
+    assert [str(call.url) for call in calls] == ["https://gateway.example.test/v1/models", "https://gateway.example.test/v1/chat/completions"]
+    assert all(call.headers["authorization"] == "Bearer gateway-token" for call in calls)
+
+
+def test_gateway_rejects_unlisted_http_and_non_v1_urls(monkeypatch):
+    settings = SimpleNamespace(gateway_allowed_hosts="gateway.example.test")
+    monkeypatch.setattr(providers, "get_settings", lambda: settings)
+    from fastapi import HTTPException
+    for endpoint in ("http://gateway.example.test/v1", "https://other.example.test/v1", "https://gateway.example.test/admin", "https://gateway.example.test:8443/v1"):
+        with pytest.raises(HTTPException) as error:
+            providers._base("claude_gateway", endpoint)
+        assert error.value.status_code == 422
