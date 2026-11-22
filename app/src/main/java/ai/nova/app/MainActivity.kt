@@ -112,7 +112,7 @@ private fun NovaApp(settings: SecureSettings) {
             OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("Scoped NOVA API token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
             Text("The token is encrypted with Android Keystore on this device. Use an API key with only the scopes needed.", style = MaterialTheme.typography.bodySmall)
         }
-    }, confirmButton = { TextButton(onClick = { settings.put("base", base.trim().trimEnd('/')); settings.put("token", token.trim()); showSettings = false; status = "Connection settings saved. Send a message to verify." }) { Text("Save") } }, dismissButton = { TextButton(onClick = { settings.put("base", ""); settings.put("token", ""); base=""; token=""; showSettings=false; status="Backend credentials cleared.") { Text("Clear credentials") } }) { Text("Cancel") } })
+    }, confirmButton = { TextButton(onClick = { settings.put("base", base.trim().trimEnd('/')); settings.put("token", token.trim()); showSettings = false; status = "Connection settings saved. Send a message to verify." }) { Text("Save") } }, dismissButton = { TextButton(onClick = { settings.put("base", ""); settings.put("token", ""); base=""; token=""; showSettings=false; status="Backend credentials cleared." }) { Text("Clear credentials") } }) { Text("Cancel") } })
 }
 
 @Composable private fun ChatBubble(line: ChatLine) {
