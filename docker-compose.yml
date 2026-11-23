@@ -26,5 +26,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+  worker:
+    build: ./backend
+    command: ["python", "-m", "nova_api.queue_worker"]
+    environment:
+      NOVA_DATABASE_URL: postgresql+psycopg://nova:${POSTGRES_PASSWORD}@db:5432/nova
+      NOVA_PROVIDER: ${NOVA_PROVIDER:-arena}
+      NOVA_PROVIDER_BASE_URL: ${NOVA_PROVIDER_BASE_URL:-https://api.arena.ai/v1}
+      NOVA_PROVIDER_API_KEY: ${NOVA_PROVIDER_API_KEY:-}
+      NOVA_MODEL: ${NOVA_MODEL:-coding-router-preview}
+      NOVA_CREDENTIAL_ENCRYPTION_KEY: ${NOVA_CREDENTIAL_ENCRYPTION_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
 volumes:
   nova_pg:

@@ -5,8 +5,8 @@ from .config import get_settings
 
 OPENAI_COMPAT = {
     "arena": None,
+    "openai": "https://api.openai.com/v1",
     "groq": "https://api.groq.com/openai/v1",
-    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
     "openrouter": "https://openrouter.ai/api/v1",
 }
 
@@ -15,7 +15,7 @@ def _gateway_base(endpoint: str | None) -> str:
     """Accept only explicitly allow-listed HTTPS gateway origins to prevent SSRF."""
     from urllib.parse import urlsplit
     if not endpoint:
-        raise HTTPException(422, "Claude Code Gateway requires an HTTPS base URL")
+        raise HTTPException(422, "A compatible gateway requires an HTTPS base URL")
     try:
         parsed = urlsplit(endpoint.strip())
         port = parsed.port
@@ -48,8 +48,12 @@ def _base(provider: str, endpoint: str | None = None) -> str:
         if not endpoint or not endpoint.startswith("https://api.cloudflare.com/client/v4/accounts/"):
             raise HTTPException(422, "Cloudflare requires its account-specific API base URL")
         return endpoint.rstrip("/")
-    if provider == "claude_gateway":
+    if provider in {"claude_gateway", "openai_compatible", "anthropic_compatible"}:
         return _gateway_base(endpoint)
+    if provider == "anthropic":
+        return "https://api.anthropic.com"
+    if provider == "gemini":
+        return "https://generativelanguage.googleapis.com/v1beta"
     if provider not in OPENAI_COMPAT:
         raise HTTPException(422, "Unsupported AI provider")
     return OPENAI_COMPAT[provider].rstrip("/")
@@ -58,8 +62,15 @@ def _base(provider: str, endpoint: str | None = None) -> str:
 async def _request(method: str, url: str, *, secret: str, provider: str, json_body=None):
     cfg = get_settings()
     try:
+        headers = {"Content-Type": "application/json"}
+        if provider in {"anthropic", "anthropic_compatible"}:
+            headers.update({"x-api-key": secret, "anthropic-version": "2023-06-01"})
+        elif provider == "gemini":
+            headers["x-goog-api-key"] = secret
+        else:
+            headers["Authorization"] = f"Bearer {secret}"
         async with httpx.AsyncClient(timeout=cfg.request_timeout_seconds) as client:
-            response = await client.request(method, url, headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}, json=json_body)
+            response = await client.request(method, url, headers=headers, json=json_body)
     except httpx.TimeoutException:
         raise HTTPException(504, "AI provider timed out")
     except httpx.RequestError:
@@ -80,8 +91,20 @@ async def list_models(api_key: str, base_url: str | None = None, provider: str =
         data = await _request("GET", f"{base}/ai/models/search?task=text-generation&per_page=100", secret=api_key, provider=provider)
         entries = data.get("result", []) if data.get("success") else []
         model_ids = [x.get("name") for x in entries if isinstance(x, dict) and isinstance(x.get("name"), str)]
+    elif provider == "gemini":
+        data = await _request("GET", base + "/models?pageSize=100", secret=api_key, provider=provider)
+        entries = data.get("models", [])
+        model_ids = []
+        if isinstance(entries, list):
+            for item in entries:
+                if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                    continue
+                methods = item.get("supportedGenerationMethods", [])
+                if isinstance(methods, list) and "generateContent" in methods:
+                    model_ids.append(item["name"].removeprefix("models/"))
     else:
-        data = await _request("GET", base + "/models", secret=api_key, provider=provider)
+        path = "/v1/models" if provider == "anthropic" else "/models"
+        data = await _request("GET", base + path, secret=api_key, provider=provider)
         entries = data.get("data", [])
         model_ids = [x.get("id") for x in entries if isinstance(x, dict) and isinstance(x.get("id"), str)] if isinstance(entries, list) else []
     if not model_ids:
@@ -89,7 +112,7 @@ async def list_models(api_key: str, base_url: str | None = None, provider: str =
     return model_ids[:200]
 
 
-async def complete_detailed(message: str, model: str | None = None, history: list[dict[str, str]] | None = None, api_key: str | None = None, base_url: str | None = None, provider: str = "arena", account_id: str | None = None, system: str | None = None, temperature: float = 0.2, context_length: int | None = None) -> tuple[str, str, int | None, int | None]:
+async def complete_detailed(message: str, model: str | None = None, history: list[dict[str, str]] | None = None, api_key: str | None = None, base_url: str | None = None, provider: str = "arena", account_id: str | None = None, system: str | None = None, temperature: float = 0.2, context_length: int | None = None, max_tokens: int | None = None, include_finish_reason: bool = False):
     cfg = get_settings()
     secret = api_key or cfg.provider_api_key
     if not secret:
@@ -110,27 +133,81 @@ async def complete_detailed(message: str, model: str | None = None, history: lis
         if used + size <= limit:
             retained.insert(0, item); used += size
     messages = system_messages + retained + [{"role": "user", "content": message}]
+    output_limit = min(max_tokens or cfg.max_completion_tokens, cfg.max_completion_tokens)
+    if provider == "gemini":
+        import re
+        model_name = chosen.removeprefix("models/")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,160}", model_name):
+            raise HTTPException(422, "Gemini model ID is invalid")
+        contents = [{"role": "model" if item["role"] == "assistant" else "user", "parts": [{"text": item["content"]}]} for item in retained]
+        contents.append({"role": "user", "parts": [{"text": message}]})
+        request_body = {"contents": contents, "generationConfig": {"temperature": temperature, "maxOutputTokens": output_limit}}
+        if system:
+            request_body["systemInstruction"] = {"parts": [{"text": system}]}
+        data = await _request("POST", f"{_base(provider, base_url)}/models/{model_name}:generateContent", secret=secret, provider=provider, json_body=request_body)
+        try:
+            candidate = data["candidates"][0]
+            parts = candidate["content"]["parts"]
+            text = "".join(part["text"] for part in parts if isinstance(part, dict) and isinstance(part.get("text"), str))
+            served_model = str(data.get("modelVersion", model_name))
+            usage = data.get("usageMetadata") or {}
+            prompt_tokens = usage.get("promptTokenCount") if isinstance(usage, dict) else None
+            completion_tokens = usage.get("candidatesTokenCount") if isinstance(usage, dict) else None
+            finish_reason = candidate.get("finishReason")
+        except (KeyError, IndexError, TypeError):
+            raise HTTPException(502, "Gemini returned no usable text candidate")
+        if not text:
+            raise HTTPException(502, "Gemini returned no text content")
+        result = (text, served_model, prompt_tokens if isinstance(prompt_tokens, int) else None, completion_tokens if isinstance(completion_tokens, int) else None)
+        return (*result, finish_reason if isinstance(finish_reason, str) else None) if include_finish_reason else result
+    if provider in {"anthropic", "anthropic_compatible"}:
+        if temperature > 1:
+            raise HTTPException(422, "Anthropic Messages API supports temperature no greater than 1")
+        anthropic_messages = retained + [{"role": "user", "content": message}]
+        request_body = {"model": chosen, "max_tokens": output_limit, "messages": anthropic_messages, "temperature": temperature}
+        if system:
+            request_body["system"] = system
+        base = _base(provider, base_url)
+        path = "/v1/messages" if provider == "anthropic" else "/messages"
+        data = await _request("POST", base + path, secret=secret, provider=provider, json_body=request_body)
+        try:
+            blocks = data["content"]
+            text = "\\n".join(block["text"] for block in blocks if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str))
+            served_model = str(data.get("model", chosen))
+            usage = data.get("usage") or {}
+            prompt_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+            completion_tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
+            finish_reason = data.get("stop_reason")
+        except (KeyError, TypeError):
+            raise HTTPException(502, "AI provider returned an invalid Anthropic Messages response")
+        if not isinstance(text, str) or not text:
+            raise HTTPException(502, "AI provider returned no text content; tool-use responses are not supported")
+        result = (text, served_model, prompt_tokens if isinstance(prompt_tokens, int) else None, completion_tokens if isinstance(completion_tokens, int) else None)
+        return (*result, finish_reason if isinstance(finish_reason, str) else None) if include_finish_reason else result
     if provider == "cloudflare":
         if not account_id:
             raise HTTPException(422, "Cloudflare account ID is required")
-        data = await _request("POST", f"{_base(provider, base_url)}/ai/run/{chosen}", secret=secret, provider=provider, json_body={"messages": messages, "temperature": temperature, "max_tokens": cfg.max_completion_tokens})
+        data = await _request("POST", f"{_base(provider, base_url)}/ai/run/{chosen}", secret=secret, provider=provider, json_body={"messages": messages, "temperature": temperature, "max_tokens": output_limit})
         try:
             text = data["result"]["response"]
         except (KeyError, TypeError):
             raise HTTPException(502, "AI provider returned an invalid chat completion")
-        return text, chosen, None, None
-    data = await _request("POST", _base(provider, base_url) + "/chat/completions", secret=secret, provider=provider, json_body={"model": chosen, "messages": messages, "temperature": temperature, "max_tokens": cfg.max_completion_tokens})
+        result = (text, chosen, None, None)
+        return (*result, None) if include_finish_reason else result
+    data = await _request("POST", _base(provider, base_url) + "/chat/completions", secret=secret, provider=provider, json_body={"model": chosen, "messages": messages, "temperature": temperature, "max_tokens": output_limit})
     try:
         text = data["choices"][0]["message"]["content"]
         served_model = str(data.get("model", chosen))
         usage = data.get("usage") or {}
         prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
         completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        finish_reason = data["choices"][0].get("finish_reason")
     except (KeyError, IndexError, TypeError):
         raise HTTPException(502, "AI provider returned an invalid chat completion")
     if not isinstance(text, str):
         raise HTTPException(502, "AI provider returned an unsupported response format")
-    return text, served_model, prompt_tokens if isinstance(prompt_tokens, int) else None, completion_tokens if isinstance(completion_tokens, int) else None
+    result = (text, served_model, prompt_tokens if isinstance(prompt_tokens, int) else None, completion_tokens if isinstance(completion_tokens, int) else None)
+    return (*result, finish_reason if isinstance(finish_reason, str) else None) if include_finish_reason else result
 
 
 async def complete(message: str, model: str | None = None, history: list[dict[str, str]] | None = None, api_key: str | None = None, base_url: str | None = None, provider: str = "arena", account_id: str | None = None, system: str | None = None, temperature: float = 0.2) -> tuple[str, str]:

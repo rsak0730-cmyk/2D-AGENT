@@ -20,7 +20,7 @@ class ProviderCredentialUpdate(BaseModel):
     api_key: str | None = None
 
 class ProviderConnectionCreate(BaseModel):
-    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway"]
+    provider: Literal["arena", "openai", "anthropic", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway", "openai_compatible", "anthropic_compatible"]
     api_key: str = Field(min_length=8, max_length=4096)
     model_ids: list[str] = Field(default_factory=list, max_length=20)
     account_id: str | None = Field(default=None, max_length=160)
@@ -46,8 +46,8 @@ class ProviderConnectionCreate(BaseModel):
     @field_validator("endpoint")
     @classmethod
     def gateway_requires_endpoint(cls, value, info):
-        if info.data.get("provider") == "claude_gateway" and (not value or not value.strip()):
-            raise ValueError("Claude Code Gateway base URL is required")
+        if info.data.get("provider") in {"claude_gateway", "openai_compatible", "anthropic_compatible"} and (not value or not value.strip()):
+            raise ValueError("Compatible gateway base URL is required")
         return value.strip().rstrip("/") if value else value
 
 class ProviderConnectionView(BaseModel):
@@ -78,7 +78,7 @@ class AgentCreate(BaseModel):
     identity: str = Field(default="worker", min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=100)
     job_title: str = Field(default="Assistant", max_length=100)
-    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway"] = "arena"
+    provider: Literal["arena", "openai", "anthropic", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway", "openai_compatible", "anthropic_compatible"] = "arena"
     model_id: str = Field(default="coding-router-preview", max_length=160)
     specialties: list[str] = Field(default_factory=list, max_length=20)
     instructions: str = Field(default="", max_length=8000)
@@ -94,7 +94,7 @@ class AgentUpdate(BaseModel):
     identity: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=100)
     job_title: str = Field(max_length=100)
-    provider: Literal["arena", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway"]
+    provider: Literal["arena", "openai", "anthropic", "groq", "gemini", "openrouter", "cloudflare", "claude_gateway", "openai_compatible", "anthropic_compatible"]
     model_id: str = Field(max_length=160)
     specialties: list[str] = Field(max_length=20)
     instructions: str = Field(max_length=8000)
@@ -117,6 +117,16 @@ class TaskCreate(BaseModel):
     description: str = Field(default="", max_length=20000)
     priority: int = Field(default=50, ge=1, le=100)
     max_attempts: int = Field(default=2, ge=1, le=5)
+    dependencies: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("dependencies")
+    @classmethod
+    def unique_dependencies(cls, values):
+        if any(not item or len(item) > 80 for item in values):
+            raise ValueError("Dependency task IDs must be non-empty and bounded")
+        if len(set(values)) != len(values):
+            raise ValueError("Task dependencies must be unique")
+        return values
 
 class TaskView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -125,6 +135,7 @@ class TaskView(BaseModel):
     description: str
     state: str
     priority: int
+    dependencies: list[str]
     checkpoint: dict
     result: str | None
     error_detail: str | None
@@ -135,6 +146,7 @@ class TaskView(BaseModel):
     updated_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    next_retry_at: datetime | None
 
 class CheckpointUpdate(BaseModel):
     state: Literal["ANALYZING", "PLANNING", "RECRUITING", "ASSIGNED", "RUNNING", "WAITING_FOR_TOOL", "WAITING_FOR_API", "WAITING_FOR_APPROVAL", "PAUSED", "FAILED", "TESTING", "COMPLETED", "CANCELLED"]
@@ -162,6 +174,31 @@ class MemoryView(BaseModel):
     importance: float
     created_at: datetime
     accessed_at: datetime | None
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=20000)
+    conversation_id: str | None = None
+
+class AgentChatMessageView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    provider: str | None
+    model_id: str | None
+    created_at: datetime
+
+class AgentChatView(BaseModel):
+    conversation_id: str | None
+    title: str | None
+    messages: list[AgentChatMessageView]
+
+class AgentChatResponse(BaseModel):
+    conversation_id: str
+    response: str
+    provider: str
+    model: str
+    message_id: str
 
 class AgentMessageCreate(BaseModel):
     task_id: str | None = None

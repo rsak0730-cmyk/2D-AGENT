@@ -97,7 +97,12 @@ class Task(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     state: Mapped[str] = mapped_column(String(32), default="RECEIVED", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=50)
+    dependencies: Mapped[list] = mapped_column(JSON, default=list)
     checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -116,7 +121,11 @@ class TaskAssignment(Base):
     subtask_key: Mapped[str] = mapped_column(String(60))
     title: Mapped[str] = mapped_column(String(240))
     instructions: Mapped[str] = mapped_column(Text)
+    depends_on: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(32), default="QUEUED", index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
@@ -133,6 +142,63 @@ class AgentMessage(Base):
     recipient_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True)
     message_type: Mapped[str] = mapped_column(String(32), default="report")
     content: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class Meeting(Base):
+    __tablename__ = "meetings"
+    __table_args__ = (Index("ix_meetings_owner_status_scheduled", "owner_key_id", "status", "scheduled_at"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    agenda: Mapped[str] = mapped_column(Text)
+    project_context: Mapped[str] = mapped_column(Text, default="")
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="scheduled", index=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class MeetingInvitation(Base):
+    __tablename__ = "meeting_invitations"
+    __table_args__ = (UniqueConstraint("meeting_id", "agent_id", name="uq_meeting_invitation_agent"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="invited", index=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class MeetingMessage(Base):
+    __tablename__ = "meeting_messages"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id", ondelete="CASCADE"), index=True)
+    speaker_agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class AgentChatSession(Base):
+    __tablename__ = "agent_chat_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(120), default="Agent chat")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now, index=True)
+
+class AgentChatMessage(Base):
+    __tablename__ = "agent_chat_messages"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_chat_sessions.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    model_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 class AgentMemory(Base):
@@ -183,4 +249,35 @@ class ResourceSetting(Base):
     max_concurrency: Mapped[int] = mapped_column(Integer, default=2)
     max_active_tasks: Mapped[int] = mapped_column(Integer, default=4)
     daily_request_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+class OfficeLayout(Base):
+    __tablename__ = "office_layouts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), unique=True, index=True)
+    width: Mapped[int] = mapped_column(Integer, default=40)
+    height: Mapped[int] = mapped_column(Integer, default=24)
+    rooms: Mapped[list] = mapped_column(JSON, default=list)
+    furniture: Mapped[list] = mapped_column(JSON, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+class OfficeAgentPosition(Base):
+    __tablename__ = "office_agent_positions"
+    __table_args__ = (UniqueConstraint("owner_key_id", "agent_id", name="uq_office_position_owner_agent"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    x: Mapped[int] = mapped_column(Integer)
+    y: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+class OfficeMove(Base):
+    __tablename__ = "office_moves"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    destination: Mapped[list] = mapped_column(JSON)
+    route: Mapped[list] = mapped_column(JSON, default=list)
+    state: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

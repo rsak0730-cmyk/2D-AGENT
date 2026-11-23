@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     max_prompt_characters: int = Field(default=60000, ge=1000, le=1000000)
     gateway_allowed_hosts: str = ""
     credential_encryption_key: str = ""
+    credential_encryption_key_previous: str = ""
 
 @lru_cache
 def get_settings() -> Settings:
