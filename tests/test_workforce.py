@@ -118,8 +118,15 @@ def test_manager_delegates_to_real_workers_and_persists_results(monkeypatch):
         entrance = rooms[room_id]["entrance"]
         pos.x, pos.y = entrance["x"], entrance["y"]
     positions_db.commit(); positions_db.close()
-    task_result = client.post("/api/v1/tasks", headers=owner, json={"title":"Review API security", "description":"Inspect auth behavior", "max_attempts":2})
+    requested_worker_id = next(item["id"] for item in seeded.json() if item["identity"] == "backend")
+    outsider = auth_key(["tasks:write", "agents:write"])
+    foreign_worker = client.post("/api/v1/agents", headers=outsider, json={"identity":"qa", "name":"Foreign QA"})
+    assert foreign_worker.status_code == 200, foreign_worker.text
+    rejected_cross_owner = client.post("/api/v1/tasks", headers=owner, json={"title":"Reject foreign worker", "requested_agent_id":foreign_worker.json()["id"]})
+    assert rejected_cross_owner.status_code == 422
+    task_result = client.post("/api/v1/tasks", headers=owner, json={"title":"Review API security", "description":"Inspect auth behavior", "max_attempts":2, "requested_agent_id":requested_worker_id})
     assert task_result.status_code == 200, task_result.text
+    assert task_result.json()["requested_agent_id"] == requested_worker_id
     calls = []
     async def fake_complete(message, model=None, history=None, api_key=None, base_url=None, provider="arena", system=None, **kwargs):
         calls.append((message, model, provider, system))
@@ -136,6 +143,8 @@ def test_manager_delegates_to_real_workers_and_persists_results(monkeypatch):
     assert len(calls) == 4
     db = TestingSession()
     assignments = db.query(TaskAssignment).filter_by(task_id=task_result.json()["id"]).all()
+    requested_assignment = next(assignment for assignment in assignments if assignment.title == "Review auth")
+    assert requested_assignment.agent_id == requested_worker_id
     messages = db.query(AgentMessage).filter_by(task_id=task_result.json()["id"]).all()
     from backend.nova_api.models import OfficeAgentPosition, OfficeMove
     worker_ids = {assignment.agent_id for assignment in assignments}

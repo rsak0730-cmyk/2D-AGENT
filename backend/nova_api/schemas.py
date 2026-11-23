@@ -118,6 +118,7 @@ class TaskCreate(BaseModel):
     priority: int = Field(default=50, ge=1, le=100)
     max_attempts: int = Field(default=2, ge=1, le=5)
     dependencies: list[str] = Field(default_factory=list, max_length=20)
+    requested_agent_id: str | None = Field(default=None, max_length=80)
 
     @field_validator("dependencies")
     @classmethod
@@ -142,6 +143,7 @@ class TaskView(BaseModel):
     attempt_count: int
     max_attempts: int
     assigned_agent_id: str | None
+    requested_agent_id: str | None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None

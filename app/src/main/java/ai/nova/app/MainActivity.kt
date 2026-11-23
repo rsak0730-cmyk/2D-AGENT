@@ -1,7 +1,11 @@
 package ai.nova.app
 
 import android.os.Bundle
+import android.app.Activity
 import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
@@ -60,18 +64,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val settings = SecureSettings(this)
-        setContent { MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF6750A4), background = Color(0xFFF7F8FC))) { NovaApp(settings) } }
+        setContent { MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF9DDCD9), secondary = Color(0xFFB8A8F4), background = Color(0xFF080D18), surface = Color(0xFF101827))) { NovaApp(settings) } }
     }
 }
 
 private data class ChatLine(val text: String, val fromUser: Boolean)
 private data class ConversationSummary(val id: String, val title: String)
+private data class MemoryItem(val id: String, val scope: String, val content: String, val agentId: String?, val projectKey: String?, val importance: Double)
 private data class AgentChatSnapshot(val conversationId: String?, val messages: List<ChatLine>)
 private data class AgentChatReply(val conversationId: String, val response: String, val provider: String, val model: String)
 private data class ProviderConfig(val provider: String, val modelId: String, val configured: Boolean, val keySource: String)
 private data class ProviderTestResult(val modelsAvailable: Int, val modelIds: List<String>)
 private data class WorkforceAgent(val id: String, val identity: String, val name: String, val title: String, val provider: String, val model: String, val instructions: String, val status: String, val specialties: List<String>, val temperature: Double, val contextLength: Int, val permissions: List<String>, val memoryEnabled: Boolean, val priority: Int, val critical: Boolean, val maxDuration: Int)
-private data class WorkforceTask(val id: String, val title: String, val state: String, val result: String?, val error: String?, val priority: Int, val assignedAgentId: String?, val progressPercent: Int, val progressStage: String)
+private data class WorkforceTask(val id: String, val title: String, val state: String, val result: String?, val error: String?, val priority: Int, val assignedAgentId: String?, val requestedAgentId: String?, val progressPercent: Int, val progressStage: String)
 private data class AgentAnalytics(val identity: String, val name: String, val status: String, val assignments: Int, val completed: Int, val failed: Int, val active: Int, val durationSeconds: Double?, val durationSamples: Int, val requests: Int, val successful: Int, val failedRequests: Int, val inputTokens: Int, val outputTokens: Int)
 private data class OfficeEvent(val type: String, val agentId: String?, val taskId: String?, val createdAt: String, val payload: String)
 private data class MeetingInviteInfo(val agentId: String,val name: String,val status: String)
@@ -84,7 +89,7 @@ private data class OfficeCharacterState(val agentId: String, val x: Int, val y: 
 private data class OfficeWorld(val width: Int, val height: Int, val rooms: List<OfficeRoomInfo>, val furniture: List<OfficeFurnitureInfo>, val characters: Map<String, OfficeCharacterState>)
 private data class ProviderConnectionInfo(val id: String, val provider: String, val models: List<String>, val priority: Int, val status: String)
 private data class WorkforceSnapshot<A, B, C, D, E>(val first: A, val second: B, val third: C, val fourth: D, val fifth: E)
-private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Agents"), TASKS("Tasks"), SETTINGS("Settings") }
+private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Workers"), TASKS("Projects & tasks"), MEETINGS("Meetings"), ACTIVITY("Activity"), MEMORY("Memory"), INTEGRATIONS("Integrations"), SETTINGS("Settings") }
 
 @Composable
 private fun PixelOfficeScene(agents: List<WorkforceAgent>, world: OfficeWorld?, modifier: Modifier = Modifier, onAgentSelected: (WorkforceAgent) -> Unit) {
@@ -94,17 +99,17 @@ private fun PixelOfficeScene(agents: List<WorkforceAgent>, world: OfficeWorld?, 
     val phase by cycle.animateFloat(0f, 1f, infiniteRepeatable(tween(450), repeatMode = RepeatMode.Reverse), label = "typing")
     Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF18243A))) {
         if (world == null) {
-            Box(Modifier.fillMaxWidth().height(270.dp), contentAlignment = Alignment.Center) { Text("Waiting for persisted office state from NOVA backend", color = Color.White) }
-        } else BoxWithConstraints {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Waiting for persisted office state from NOVA backend", color = Color.White) }
+        } else BoxWithConstraints(Modifier.fillMaxSize()) {
             val logicalHeight = 40f + world.height * (360f / world.width)
-            val sceneHeight = maxOf(270f, logicalHeight * maxWidth.value / 360f).dp
+            val sceneHeight = maxHeight
             val tileWidth = 360f / world.width
             val tileHeight = (logicalHeight - 40f) / world.height
             val cellWidthDp = maxWidth / world.width.toFloat()
             val headerDp = sceneHeight * (40f / logicalHeight)
             val cellHeightDp = (sceneHeight - headerDp) / world.height.toFloat()
             val density = LocalDensity.current
-            Canvas(Modifier.fillMaxWidth().height(sceneHeight)) {
+            Canvas(Modifier.fillMaxSize()) {
                 val sx = size.width / 360f
                 val sy = size.height / logicalHeight
                 fun pixel(x: Float, y: Float, w: Float, h: Float, color: Color) {
@@ -225,10 +230,23 @@ private fun NovaApp(settings: SecureSettings) {
             pendingSpeech = text
         }
     }
-    var section by remember { mutableStateOf(Section.ASSISTANT) }
+    var section by remember { mutableStateOf(Section.HQ) }
     var base by remember { mutableStateOf(settings.get("base")) }
     var token by remember { mutableStateOf(settings.get("token")) }
+    var backendStatus by remember { mutableStateOf(if (settings.get("base").isBlank()) "Backend not configured" else "Checking backend…") }
+    var backendBusy by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showNavigation by remember { mutableStateOf(false) }
+    var assistantExpanded by remember { mutableStateOf(false) }
+    var assistantListening by remember { mutableStateOf(false) }
+    var assistantResponding by remember { mutableStateOf(false) }
+    var memoryDraft by remember { mutableStateOf("") }
+    var memoryScope by remember { mutableStateOf("headquarters") }
+    var memoryAgentId by remember { mutableStateOf<String?>(null) }
+    var memoryProjectKey by remember { mutableStateOf("") }
+    var memoryStatus by remember { mutableStateOf("Saved workspace memories load from your NOVA backend.") }
+    val memories = remember { mutableStateListOf<MemoryItem>() }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
     var showProviderSettings by remember { mutableStateOf(false) }
     var providerModel by remember { mutableStateOf("coding-router-preview") }
     var providerModelOptions by remember { mutableStateOf(emptyList<String>()) }
@@ -275,6 +293,7 @@ private fun NovaApp(settings: SecureSettings) {
     var usageSummary by remember { mutableStateOf("Usage summary not loaded") }
     var newTaskTitle by remember { mutableStateOf("") }
     var newTaskDescription by remember { mutableStateOf("") }
+    var requestedTaskAgentId by remember { mutableStateOf<String?>(null) }
     val selectedTaskDependencies = remember { mutableStateListOf<String>() }
     var providerDialog by remember { mutableStateOf(false) }
     var registryProvider by remember { mutableStateOf("openai_compatible") }
@@ -289,6 +308,91 @@ private fun NovaApp(settings: SecureSettings) {
     var status by remember { mutableStateOf("Connect a NOVA backend in Settings to send messages.") }
     var historyStatus by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val voiceLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        assistantListening = false
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!spoken.isNullOrBlank()) draft = listOf(draft.trim(), spoken.trim()).filter { it.isNotBlank() }.joinToString(" ")
+        }
+    }
+    val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            try {
+                val attached = context.contentResolver.openInputStream(uri)?.use { input ->
+                    val output = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (output.size() + count > 256_000) throw IOException("Text attachments are limited to 256 KB")
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                } ?: throw IOException("Could not read the selected file")
+                val text = attached.toString(Charsets.UTF_8)
+                if ('\u0000' in text) throw IOException("Only plain UTF-8 text attachments are supported")
+                val filename = uri.lastPathSegment?.substringAfterLast('/') ?: "text file"
+                draft = listOf(draft.trim(), "Attached text ($filename):\n$text").filter { it.isNotBlank() }.joinToString("\n\n")
+            } catch (error: Exception) { status = error.message ?: "Could not read attachment" }
+        }
+    }
+    val sendAssistantMessage: () -> Unit = {
+        if (!busy && draft.isNotBlank()) {
+            val text = draft.trim(); draft = ""; chat.add(ChatLine(text, true)); val answerIndex = chat.size; chat.add(ChatLine("", false)); busy = true; status = "Streaming from NOVA backend…"
+            scope.launch {
+                val chunks = Channel<String>(Channel.UNLIMITED)
+                var completedResponse: String? = null
+                val collector = launch { for (chunk in chunks) { assistantResponding = true; if (answerIndex < chat.size) chat[answerIndex] = ChatLine(chat[answerIndex].text + chunk, false) } }
+                try {
+                    val result = withContext(Dispatchers.IO) { sendMessageStreaming(base, token, text, conversationId) { chunk -> chunks.trySend(chunk) } }
+                    conversationId = result.conversationId
+                    completedResponse = result.response
+                    status = "Connected · streamed response saved"
+                } catch (error: Exception) {
+                    status = error.message ?: "Stream interrupted. Retry starts a new generation."
+                    if (answerIndex < chat.size && chat[answerIndex].text.isBlank()) chat.removeAt(answerIndex)
+                } finally {
+                    chunks.close(); collector.join()
+                    if (completedResponse != null && answerIndex < chat.size) chat[answerIndex] = ChatLine(completedResponse!!, false)
+                    busy = false; assistantResponding = false
+                }
+            }
+        }
+    }
+    val refreshMemories: () -> Unit = {
+        scope.launch {
+            try { memories.clear(); memories.addAll(withContext(Dispatchers.IO) { loadMemories(base, token) }); memoryStatus = "${memories.size} saved memories · synced" }
+            catch (error: Exception) { memoryStatus = error.message ?: "Could not load saved memory" }
+        }
+    }
+    val saveMemory: () -> Unit = {
+        if (memoryDraft.isNotBlank()) scope.launch {
+            try { withContext(Dispatchers.IO) { createMemory(base, token, memoryScope, memoryDraft.trim(), memoryAgentId, memoryProjectKey.trim()) }; memoryDraft = ""; refreshMemories() }
+            catch (error: Exception) { memoryStatus = error.message ?: "Memory was not saved" }
+        }
+    }
+    val testBackendConnection: () -> Unit = {
+        backendBusy = true; backendStatus = "Checking HTTPS backend and token…"
+        scope.launch {
+            try { backendStatus = withContext(Dispatchers.IO) { checkBackendConnection(base, token) }; if (token.isNotBlank()) refreshWorkforce() }
+            catch (error: Exception) { backendStatus = error.message ?: "Backend connection failed; retrying automatically" }
+            finally { backendBusy = false }
+        }
+    }
+    LaunchedEffect(base, token, showSettings) {
+        if (showSettings) return@LaunchedEffect
+        if (base.isBlank()) { backendStatus = "Backend not configured"; return@LaunchedEffect }
+        var backoff = 1_000L
+        while (isActive) {
+            try {
+                backendStatus = withContext(Dispatchers.IO) { checkBackendConnection(base, token) }
+                backoff = 30_000L
+            } catch (error: Exception) {
+                backendStatus = error.message ?: "Backend unreachable · reconnecting"
+                backoff = (backoff * 2).coerceAtMost(30_000L)
+            }
+            delay(backoff)
+        }
+    }
     val openProviderSettings: () -> Unit = {
         showProviderSettings = true
         providerStatus = "Loading provider status…"
@@ -328,7 +432,17 @@ private fun NovaApp(settings: SecureSettings) {
         }
     }
     LaunchedEffect(section, base, token) {
-        if (section in setOf(Section.HQ, Section.AGENTS, Section.TASKS) && base.startsWith("https://") && token.isNotBlank()) {
+        if (section == Section.MEMORY) refreshMemories()
+        if (section in setOf(Section.ACTIVITY, Section.INTEGRATIONS, Section.MEETINGS)) refreshWorkforce()
+        if (section in setOf(Section.INTEGRATIONS, Section.SETTINGS) && base.startsWith("https://") && token.isNotBlank()) {
+            try {
+                val config = withContext(Dispatchers.IO) { fetchProviderConfiguration(base, token) }
+                providerModel = config.modelId; providerConfigured = config.configured; providerKeySource = config.keySource
+            } catch (_: Exception) { providerConfigured = false; providerKeySource = "unavailable" }
+        }
+    }
+    LaunchedEffect(section, base, token) {
+        if (section in setOf(Section.HQ, Section.AGENTS, Section.TASKS, Section.ACTIVITY, Section.INTEGRATIONS, Section.MEETINGS) && base.startsWith("https://") && token.isNotBlank()) {
             var backoffMs = 1_000L
             while (isActive) {
                 refreshWorkforce()
@@ -385,11 +499,33 @@ private fun NovaApp(settings: SecureSettings) {
             } catch (e: Exception) { agentChatStatus = e.message ?: "Could not load employee chat history" }
         }
     }
-    Scaffold(
-        topBar = { TopAppBar(title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text("Personal AI workspace", style = MaterialTheme.typography.labelSmall) } }, actions = { if (section == Section.ASSISTANT) { IconButton(onClick = { conversationId = null; chat.clear(); status = "New conversation" }) { Icon(Icons.Default.AddComment, "New conversation") }; IconButton(onClick = { showHistory = true; historyStatus = "Loading history…"; scope.launch { try { val loaded = withContext(Dispatchers.IO) { fetchConversations(base, token) }; conversations.clear(); conversations.addAll(loaded); historyStatus = if (loaded.isEmpty()) "No saved conversations yet." else "Select a conversation to continue." } catch (e: Exception) { historyStatus = e.message ?: "Could not load history" } } }) { Icon(Icons.Default.History, "Conversation history") } }; IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Settings") } }) },
-        bottomBar = { NavigationBar { Section.values().forEach { item -> NavigationBarItem(selected = section == item, onClick = { section = item }, icon = { Icon(when(item){Section.HOME->Icons.Default.Home;Section.ASSISTANT->Icons.Default.Chat;Section.HQ->Icons.Default.Business;Section.AGENTS->Icons.Default.Groups;Section.TASKS->Icons.Default.Checklist;Section.SETTINGS->Icons.Default.Settings}, item.title) }, label = { Text(item.title) }) } } }
-    ) { insets ->
-        Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 16.dp)) {
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Text("NOVA", Modifier.padding(start = 24.dp, top = 26.dp, bottom = 4.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("Living AI headquarters", Modifier.padding(start = 24.dp, bottom = 18.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                NovaDrawerItem(Section.HQ, section, Icons.Default.Business) { section = Section.HQ; scope.launch { drawerState.close() } }
+                NovaDrawerItem(Section.AGENTS, section, Icons.Default.Groups) { section = Section.AGENTS; scope.launch { drawerState.close() } }
+                NovaDrawerItem(Section.TASKS, section, Icons.Default.FolderOpen, "Projects & tasks") { section = Section.TASKS; scope.launch { drawerState.close() } }
+                NovaDrawerItem(Section.MEETINGS, section, Icons.Default.Groups) { section = Section.MEETINGS; scope.launch { drawerState.close() } }
+                NovaDrawerItem(Section.ACTIVITY, section, Icons.Default.History) { section = Section.ACTIVITY; scope.launch { drawerState.close() } }
+                NovaDrawerItem(Section.MEMORY, section, Icons.Default.Psychology) { section = Section.MEMORY; scope.launch { drawerState.close() } }
+                HorizontalDivider(Modifier.padding(vertical = 10.dp))
+                NavigationDrawerItem(label = { Text("Model management") }, selected = false, icon = { Icon(Icons.Default.Tune, null) }, onClick = { scope.launch { drawerState.close() }; openProviderSettings() }, modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding))
+                NavigationDrawerItem(label = { Text("Gateway management") }, selected = false, icon = { Icon(Icons.Default.Hub, null) }, onClick = { scope.launch { drawerState.close() }; section = Section.SETTINGS; openProviderSettings() }, modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding))
+                NovaDrawerItem(Section.INTEGRATIONS, section, Icons.Default.Extension) { section = Section.INTEGRATIONS; scope.launch { drawerState.close() } }
+                NavigationDrawerItem(label = { Text("Application settings") }, selected = section == Section.SETTINGS, icon = { Icon(Icons.Default.Settings, null) }, onClick = { section = Section.SETTINGS; scope.launch { drawerState.close() } }, modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding))
+                NavigationDrawerItem(label = { Text("AI assistant") }, selected = false, icon = { Icon(Icons.Default.AutoAwesome, null) }, onClick = { assistantExpanded = true; scope.launch { drawerState.close() } }, modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding))
+            }
+        },
+    ) {
+      Scaffold(
+        topBar = { TopAppBar(navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, "Open NOVA navigation") } }, title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text(backendStatus, style = MaterialTheme.typography.labelSmall, maxLines = 1) } }, actions = { IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Backend connection") } }) },
+        bottomBar = { NavigationBar(containerColor = Color(0xFF0D1421)) { listOf(Section.HQ, Section.AGENTS, Section.TASKS, Section.ACTIVITY, Section.MEMORY).forEach { item -> NavigationBarItem(selected = section == item, onClick = { section = item }, icon = { Icon(when(item){Section.HQ->Icons.Default.Business;Section.AGENTS->Icons.Default.Groups;Section.TASKS->Icons.Default.FolderOpen;Section.ACTIVITY->Icons.Default.History;Section.MEMORY->Icons.Default.Psychology;else->Icons.Default.Home}, item.title) }, label = { Text(item.title) }) } } }
+      ) { insets ->
+        Box(Modifier.fillMaxSize().padding(insets)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp).padding(bottom = 68.dp)) {
             when (section) {
                 Section.ASSISTANT -> {
                     Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -405,56 +541,43 @@ private fun NovaApp(settings: SecureSettings) {
                     }
                     Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(value = draft, onValueChange = { draft = it }, modifier = Modifier.weight(1f), label = { Text("Message NOVA") }, enabled = !busy, maxLines = 4)
-                        Spacer(Modifier.width(8.dp)); IconButton(enabled = !busy && draft.isNotBlank(), onClick = {
-                            val text = draft.trim(); draft = ""; chat.add(ChatLine(text, true)); busy = true; status = "Sending to configured backend…"
-                            scope.launch {
-                                try { val result = withContext(Dispatchers.IO) { sendMessage(base, token, text, conversationId) }; conversationId = result.conversationId; chat.add(ChatLine(result.response, false)); status = "Connected · response from configured provider" }
-                                catch (e: Exception) { status = e.message ?: "Request failed" }
-                                finally { busy = false }
-                            }
-                        }) { Icon(Icons.Default.Send, "Send message") }
+                        Spacer(Modifier.width(8.dp)); IconButton(enabled = !busy && draft.isNotBlank(), onClick = sendAssistantMessage) { Icon(Icons.Default.Send, "Send message") }
                     }
                 }
                 Section.HOME -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Good day", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 24.dp)); Text("Your workspace is ready. Connect a backend to enable cloud-backed features."); DashboardCard("Assistant", "Start a conversation", Icons.Default.Chat) { section = Section.ASSISTANT }; DashboardCard("Workspace status", if (token.isBlank()) "Backend not configured" else "Backend configured", Icons.Default.Cloud) { showSettings = true } }
-                Section.HQ -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 16.dp).padding(bottom = 12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) { Text("Headquarters", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f)); TextButton(onClick = refreshWorkforce) { Text(if (workforceBusy) "Loading…" else "Refresh") } }
-                    Text(workforceNotice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    PixelOfficeScene(workforceAgents, officeWorld, Modifier.padding(top = 8.dp)) { selectedOfficeAgent = it }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(enabled = officeWorld != null, onClick = { officeDraft = officeWorld?.copy(); showOfficeEditor = true }) { Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Edit rooms and furniture") }
-                    }
-                    Text("Characters occupy saved grid positions. Working animation follows backend status; walking follows validated and persisted A* steps.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Schedule a real employee meeting", style = MaterialTheme.typography.titleMedium)
-                        OutlinedTextField(meetingTitle,{meetingTitle=it},Modifier.fillMaxWidth(),label={Text("Meeting title")},singleLine=true)
-                        OutlinedTextField(meetingAgenda,{meetingAgenda=it},Modifier.fillMaxWidth(),label={Text("Agenda")},maxLines=2)
-                        OutlinedTextField(meetingContext,{meetingContext=it},Modifier.fillMaxWidth(),label={Text("Shared project context")},maxLines=3)
-                        OutlinedTextField(meetingScheduleMinutes,{meetingScheduleMinutes=it.filter(Char::isDigit)},Modifier.fillMaxWidth(),label={Text("Schedule in minutes (0 = startable now)")},singleLine=true)
-                        Text("Invite employees",style=MaterialTheme.typography.labelMedium)
-                        LazyRow(horizontalArrangement=Arrangement.spacedBy(6.dp)) { items(workforceAgents) { agent -> FilterChip(selected=agent.id in selectedMeetingParticipants,onClick={if(agent.id in selectedMeetingParticipants)selectedMeetingParticipants.remove(agent.id) else if(selectedMeetingParticipants.size<10)selectedMeetingParticipants.add(agent.id)},label={Text(agent.name)}) } }
-                        if (workforceTasks.isNotEmpty()) { Text("Optional linked task",style=MaterialTheme.typography.labelMedium); LazyRow(horizontalArrangement=Arrangement.spacedBy(6.dp)) { items(workforceTasks) { task -> FilterChip(selected=selectedMeetingTaskId==task.id,onClick={selectedMeetingTaskId=if(selectedMeetingTaskId==task.id)null else task.id},label={Text(task.title.take(22))}) } } }
-                        Button(enabled=!workforceBusy && meetingTitle.isNotBlank() && meetingAgenda.isNotBlank() && selectedMeetingParticipants.isNotEmpty(),onClick={
-                            val title=meetingTitle.trim();val agenda=meetingAgenda.trim();val context=meetingContext.trim();val attendees=selectedMeetingParticipants.toList();val taskId=selectedMeetingTaskId;val minutes=meetingScheduleMinutes.toLongOrNull()?:0L
-                            scope.launch { workforceBusy=true;try { withContext(Dispatchers.IO) { createMeeting(base,token,title,agenda,context,attendees,taskId,minutes) }; meetingTitle="";meetingAgenda="";meetingContext="";selectedMeetingParticipants.clear();workforceNotice="Meeting invitation saved; participant model calls run only when you start it." } catch(e:Exception){workforceNotice=e.message?:"Meeting could not be scheduled"} finally {workforceBusy=false;refreshWorkforce()} }
-                        }) { Text("Schedule meeting") }
-                    } }
-                    Text("Meeting history · saved transcript and participant status",style=MaterialTheme.typography.titleMedium,modifier=Modifier.padding(top=8.dp))
-                    meetings.forEach { meeting -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-                        Row(verticalAlignment=Alignment.CenterVertically) { Text(meeting.title,Modifier.weight(1f),fontWeight=FontWeight.SemiBold);Text(meeting.status.replace('_',' '),style=MaterialTheme.typography.labelMedium) }
-                        Text(meeting.agenda,style=MaterialTheme.typography.bodySmall)
-                        if (meeting.scheduledAt!=null) Text("Scheduled ${meeting.scheduledAt}",style=MaterialTheme.typography.labelSmall)
-                        meeting.invitations.forEach { invite -> Text("${invite.name}: ${invite.status}",style=MaterialTheme.typography.labelSmall) }
-                        meeting.messages.takeLast(8).forEach { line -> Text("${line.speaker}: ${line.content}",style=MaterialTheme.typography.bodySmall) }
-                        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                            if (meeting.status in listOf("scheduled","invited")) TextButton(enabled=!workforceBusy,onClick={scope.launch { workforceBusy=true;try { withContext(Dispatchers.IO) { startMeeting(base,token,meeting.id) };workforceNotice="Meeting completed; provider responses and history were saved." } catch(e:Exception){workforceNotice=e.message?:"Meeting could not run"} finally {workforceBusy=false;refreshWorkforce()} }}) { Text("Start meeting") }
-                            if (meeting.status in listOf("scheduled","invited","running")) TextButton(enabled=!workforceBusy,onClick={scope.launch { workforceBusy=true;try { withContext(Dispatchers.IO) { cancelMeeting(base,token,meeting.id) };workforceNotice="Meeting cancellation requested." } catch(e:Exception){workforceNotice=e.message?:"Could not cancel meeting"} finally {workforceBusy=false;refreshWorkforce()} }}) { Text("Cancel") }
-                            if (meeting.invitations.isNotEmpty() && workforceTasks.isNotEmpty()) TextButton(onClick={handoffMeeting=meeting;handoffTaskId=null;handoffAgentId=meeting.invitations.firstOrNull()?.agentId;handoffInstructions=""}) { Text("Task handoff") }
+                Section.HQ -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Headquarters", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                            Text("${workforceAgents.size} workers · ${workforceAgents.count { it.status.equals("working", true) }} active · $backendStatus", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                         }
-                    } } }
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) { items(workforceAgents) { agent -> AssistChip(onClick = { selectedOfficeAgent = agent }, label = { Text("${agent.name} · ${agent.status}", maxLines = 1) }, leadingIcon = { Icon(Icons.Default.Person, null) }) } }
-                    Text("Completed tasks ${workforceTasks.count { it.state == "COMPLETED" }} · recent saved events", modifier = Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.labelLarge)
-                    if (officeEvents.isEmpty()) EmptyState("No recorded activity yet", "The office shows only agents in the loaded backend roster. Event history appears after real task or provider actions.")
-                    else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { officeEvents.take(12).forEach { event -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(event.type.replace('.', ' ').replace('_', ' '), fontWeight = FontWeight.SemiBold); Text("${event.payload} · ${event.createdAt}", style = MaterialTheme.typography.bodySmall); if (event.taskId != null) Text("Task ${event.taskId.take(8)}", style = MaterialTheme.typography.labelSmall) } } } }
+                        TextButton(onClick = refreshWorkforce, enabled = !workforceBusy) { Text(if (workforceBusy) "Syncing" else "Sync") }
+                    }
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        PixelOfficeScene(workforceAgents, officeWorld, Modifier.fillMaxSize()) { selectedOfficeAgent = it }
+                        if (officeWorld == null) {
+                            Surface(Modifier.align(Alignment.Center).clickable { showSettings = true }, shape = RoundedCornerShape(18.dp), color = Color(0xE8192536)) {
+                                Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(if (base.isBlank()) "Connect your NOVA backend" else "Headquarters awaiting backend snapshot", style = MaterialTheme.typography.titleMedium)
+                                    Text(if (base.isBlank()) "The office loads persisted rooms and real workers after connection." else workforceNotice, style = MaterialTheme.typography.bodySmall)
+                                    Button(onClick = { showSettings = true }) { Text("Backend connection") }
+                                }
+                            }
+                        }
+                    }
+                    if (workforceAgents.isNotEmpty()) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(horizontal = 2.dp)) {
+                            items(workforceAgents) { agent ->
+                                val currentTask = workforceTasks.firstOrNull { it.assignedAgentId == agent.id && it.state in listOf("PLANNING", "ASSIGNED", "RUNNING") }
+                                AssistChip(onClick = { selectedOfficeAgent = agent }, label = { Column { Text(agent.name, maxLines = 1, style = MaterialTheme.typography.labelSmall); Text("${agent.title} · ${currentTask?.title ?: agentActivity(agent.status)}", maxLines = 1, style = MaterialTheme.typography.labelSmall) } }, leadingIcon = { Icon(Icons.Default.Person, null) })
+                            }
+                        }
+                    } else Text(workforceNotice, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { section = Section.MEETINGS }) { Text("Meetings") }
+                        TextButton(onClick = { section = Section.TASKS }) { Text("Projects & tasks") }
+                        TextButton(enabled = officeWorld != null, onClick = { officeDraft = officeWorld?.copy(); showOfficeEditor = true }) { Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Edit HQ") }
+                    }
                 }
                 Section.AGENTS -> Column(Modifier.fillMaxSize().padding(top = 16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) { Text("Agent workforce", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f)); TextButton(onClick = refreshWorkforce) { Text("Refresh") } }
@@ -467,6 +590,11 @@ private fun NovaApp(settings: SecureSettings) {
                     Row(verticalAlignment = Alignment.CenterVertically) { Text("Tasks", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f)); TextButton(onClick = refreshWorkforce) { Text("Refresh") } }
                     OutlinedTextField(value = newTaskTitle, onValueChange = { newTaskTitle = it }, modifier = Modifier.fillMaxWidth(), label = { Text("New task") }, singleLine = true)
                     OutlinedTextField(value = newTaskDescription, onValueChange = { newTaskDescription = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Details (optional)") }, maxLines = 2)
+                    Text("Requested worker · Head Manager may add helpers", style = MaterialTheme.typography.labelSmall)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        item { FilterChip(selected = requestedTaskAgentId == null, onClick = { requestedTaskAgentId = null }, label = { Text("Manager chooses") }) }
+                        items(workforceAgents.filter { it.identity != "manager" }) { agent -> FilterChip(selected = requestedTaskAgentId == agent.id, onClick = { requestedTaskAgentId = agent.id }, label = { Text(agent.name) }) }
+                    }
                     if (workforceTasks.isNotEmpty()) {
                         Text("Wait for these task dependencies (select any recorded tasks)", style = MaterialTheme.typography.labelSmall)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -475,12 +603,153 @@ private fun NovaApp(settings: SecureSettings) {
                             }
                         }
                     }
-                    Button(enabled = newTaskTitle.isNotBlank() && !workforceBusy, onClick = { val title = newTaskTitle.trim(); val description = newTaskDescription.trim(); val dependencies = selectedTaskDependencies.toList(); scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { createWorkforceTask(base, token, title, description, dependencies) }; newTaskTitle = ""; newTaskDescription = ""; selectedTaskDependencies.clear(); workforceNotice = "Task saved with persisted dependencies. Tap Run when every prerequisite is complete." } catch (e: Exception) { workforceNotice = e.message ?: "Task could not be saved" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Save task") }
+                    Button(enabled = newTaskTitle.isNotBlank() && !workforceBusy, onClick = { val title = newTaskTitle.trim(); val description = newTaskDescription.trim(); val dependencies = selectedTaskDependencies.toList(); val requestedWorker = requestedTaskAgentId; scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { createWorkforceTask(base, token, title, description, dependencies, requestedWorker) }; newTaskTitle = ""; newTaskDescription = ""; selectedTaskDependencies.clear(); workforceNotice = if (requestedWorker == null) "Task saved; Head Manager will select workers." else "Task saved; the requested worker is assigned the first/core subtask." } catch (e: Exception) { workforceNotice = e.message ?: "Task could not be saved" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Save task") }
                     Text(workforceNotice, style = MaterialTheme.typography.bodySmall)
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(workforceTasks) { task -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Text(task.title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Text(task.state) }; if (task.state in listOf("PLANNING", "ASSIGNED", "RUNNING")) { Text("${task.progressPercent}% · ${task.progressStage.replace('_', ' ')}", style = MaterialTheme.typography.labelSmall); LinearProgressIndicator(progress = task.progressPercent / 100f, modifier = Modifier.fillMaxWidth()) }; if (!task.result.isNullOrBlank()) Text(task.result, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)); if (!task.error.isNullOrBlank()) Text(task.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (task.state in listOf("RUNNING", "PLANNING", "ASSIGNED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { cancelWorkforceTask(base, token, task.id) }; workforceNotice = "Cancellation requested. An in-flight provider call may finish before NOVA stops at the next checkpoint." } catch (e: Exception) { workforceNotice = e.message ?: "Could not request cancellation" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Request cancel") }; if (task.state !in listOf("RUNNING", "PLANNING", "ASSIGNED", "COMPLETED", "CANCELLED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; workforceNotice = "Head Manager planning and workers are calling configured providers…"; try { withContext(Dispatchers.IO) { executeWorkforceTask(base, token, task.id) }; workforceNotice = "Execution finished; output and events are saved by the backend." } catch (e: Exception) { workforceNotice = e.message ?: "Task execution failed. Check saved task status and provider settings." } finally { workforceBusy = false; refreshWorkforce() } } }) { Text(if (task.state == "FAILED") "Retry (bounded)" else "Run with Head Manager") } } } } }
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(workforceTasks) { task -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Text(task.title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Text(task.state) }; task.requestedAgentId?.let { requestedId -> Text("Requested worker: ${workforceAgents.firstOrNull { it.id == requestedId }?.name ?: "Unavailable"}", style = MaterialTheme.typography.labelSmall) }; if (task.state in listOf("PLANNING", "ASSIGNED", "RUNNING")) { Text("${task.progressPercent}% · ${task.progressStage.replace('_', ' ')}", style = MaterialTheme.typography.labelSmall); LinearProgressIndicator(progress = task.progressPercent / 100f, modifier = Modifier.fillMaxWidth()) }; if (!task.result.isNullOrBlank()) Text(task.result, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)); if (!task.error.isNullOrBlank()) Text(task.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (task.state in listOf("RUNNING", "PLANNING", "ASSIGNED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { cancelWorkforceTask(base, token, task.id) }; workforceNotice = "Cancellation requested. An in-flight provider call may finish before NOVA stops at the next checkpoint." } catch (e: Exception) { workforceNotice = e.message ?: "Could not request cancellation" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Request cancel") }; if (task.state !in listOf("RUNNING", "PLANNING", "ASSIGNED", "COMPLETED", "CANCELLED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; workforceNotice = "Head Manager planning and workers are calling configured providers…"; try { withContext(Dispatchers.IO) { executeWorkforceTask(base, token, task.id) }; workforceNotice = "Execution finished; output and events are saved by the backend." } catch (e: Exception) { workforceNotice = e.message ?: "Task execution failed. Check saved task status and provider settings." } finally { workforceBusy = false; refreshWorkforce() } } }) { Text(if (task.state == "FAILED") "Retry (bounded)" else "Run with Head Manager") } } } } }
                 }
-                Section.SETTINGS -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(vertical = 20.dp)); Text("Backend URL: ${base.ifBlank { "Not configured" }}"); Text("NOVA token: ${if (token.isBlank()) "Not configured" else "Stored encrypted on this device"}"); Button(onClick = { showSettings = true }) { Text("Configure backend") }; Text("Backend runtime provider: ${if (providerConfigured) "Configured" else "Not configured"}"); Button(onClick = openProviderSettings) { Text("Configure runtime model") }; HorizontalDivider(); Text(usageSummary, style = MaterialTheme.typography.bodySmall); Text("Per-agent recorded workload", style = MaterialTheme.typography.titleSmall); Text(analyticsNote, style = MaterialTheme.typography.bodySmall); agentAnalytics.forEach { metric -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { Text("${metric.name} · ${metric.status}", fontWeight = FontWeight.SemiBold); Text("Assignments ${metric.assignments} · ${metric.completed} complete · ${metric.failed} failed · ${metric.active} active", style = MaterialTheme.typography.bodySmall); Text("Provider calls ${metric.requests} · ${metric.successful} successful · ${metric.failedRequests} failed · reported tokens ${metric.inputTokens + metric.outputTokens}", style = MaterialTheme.typography.bodySmall); Text("Mean completed assignment duration: ${analyticsDuration(metric)}", style = MaterialTheme.typography.bodySmall) } } }; Text("Provider router · ${providerConnections.size} saved connection(s)"); providerConnections.forEach { Text("${it.provider} · ${it.status} · ${it.models.size} model IDs", style = MaterialTheme.typography.bodySmall) }; Button(onClick = { providerDialog = true; registryKey = ""; registryStatus = "Add provider credentials over HTTPS; they are encrypted by NOVA on the server." }) { Text("Configure multi-provider router") }; Button(onClick = refreshWorkforce) { Text("Refresh workforce and usage") }; Text("Resource overview shows recorded requests only. Provider-specific limits and costs depend on account/model and are not guessed.", style = MaterialTheme.typography.bodySmall) }
+                Section.MEETINGS -> Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
+                    Text("Meetings & shared context", style = MaterialTheme.typography.headlineSmall)
+                    Text("Real invitations and provider-backed participation use the saved employee identities.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(meetingTitle, { meetingTitle = it }, Modifier.fillMaxWidth(), label = { Text("Meeting title") }, singleLine = true)
+                    OutlinedTextField(meetingAgenda, { meetingAgenda = it }, Modifier.fillMaxWidth(), label = { Text("Agenda") }, maxLines = 2)
+                    OutlinedTextField(meetingContext, { meetingContext = it }, Modifier.fillMaxWidth(), label = { Text("Shared project context") }, maxLines = 3)
+                    OutlinedTextField(meetingScheduleMinutes, { meetingScheduleMinutes = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("Schedule in minutes (0 = startable now)") }, singleLine = true)
+                    Text("Invite workers", style = MaterialTheme.typography.labelMedium)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { items(workforceAgents) { agent -> FilterChip(selected = agent.id in selectedMeetingParticipants, onClick = { if (agent.id in selectedMeetingParticipants) selectedMeetingParticipants.remove(agent.id) else if (selectedMeetingParticipants.size < 10) selectedMeetingParticipants.add(agent.id) }, label = { Text(agent.name) }) } }
+                    if (workforceTasks.isNotEmpty()) {
+                        Text("Optional linked task", style = MaterialTheme.typography.labelMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { items(workforceTasks) { task -> FilterChip(selected = selectedMeetingTaskId == task.id, onClick = { selectedMeetingTaskId = if (selectedMeetingTaskId == task.id) null else task.id }, label = { Text(task.title.take(22)) }) } }
+                    }
+                    Button(enabled = !workforceBusy && meetingTitle.isNotBlank() && meetingAgenda.isNotBlank() && selectedMeetingParticipants.isNotEmpty(), onClick = {
+                        val title = meetingTitle.trim(); val agenda = meetingAgenda.trim(); val context = meetingContext.trim(); val attendees = selectedMeetingParticipants.toList(); val taskId = selectedMeetingTaskId; val minutes = meetingScheduleMinutes.toLongOrNull() ?: 0L
+                        scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { createMeeting(base, token, title, agenda, context, attendees, taskId, minutes) }; meetingTitle = ""; meetingAgenda = ""; meetingContext = ""; selectedMeetingParticipants.clear(); workforceNotice = "Meeting saved. Start it to call each invited worker's configured model."; refreshWorkforce() } catch (error: Exception) { workforceNotice = error.message ?: "Meeting could not be scheduled" } finally { workforceBusy = false } }
+                    }) { Text("Schedule meeting") }
+                    Text(workforceNotice, style = MaterialTheme.typography.labelSmall)
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
+                        items(meetings) { meeting -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) { Text(meeting.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Text(meeting.status, style = MaterialTheme.typography.labelMedium) }
+                            Text(meeting.agenda, style = MaterialTheme.typography.bodySmall)
+                            if (meeting.scheduledAt != null) Text("Scheduled ${meeting.scheduledAt}", style = MaterialTheme.typography.labelSmall)
+                            meeting.invitations.forEach { invite -> Text("${invite.name}: ${invite.status}", style = MaterialTheme.typography.labelSmall) }
+                            meeting.messages.takeLast(6).forEach { line -> Text("${line.speaker}: ${line.content}", style = MaterialTheme.typography.bodySmall) }
+                            Row {
+                                if (meeting.status in listOf("scheduled", "invited")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { startMeeting(base, token, meeting.id) }; workforceNotice = "Provider-backed meeting completed and saved."; refreshWorkforce() } catch (error: Exception) { workforceNotice = error.message ?: "Meeting could not start" } finally { workforceBusy = false } } }) { Text("Start") }
+                                if (meeting.status in listOf("scheduled", "invited", "running")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { cancelMeeting(base, token, meeting.id) }; workforceNotice = "Cancellation requested."; refreshWorkforce() } catch (error: Exception) { workforceNotice = error.message ?: "Could not cancel" } finally { workforceBusy = false } } }) { Text("Cancel") }
+                                if (meeting.invitations.isNotEmpty() && workforceTasks.isNotEmpty()) TextButton(onClick = { handoffMeeting = meeting; handoffTaskId = null; handoffAgentId = meeting.invitations.firstOrNull()?.agentId; handoffInstructions = "" }) { Text("Task handoff") }
+                            }
+                        } } }
+                    }
+                }
+                Section.ACTIVITY -> Column(Modifier.fillMaxSize().padding(top = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text("Activity", style = MaterialTheme.typography.headlineSmall); Text("Owner-scoped persisted backend events", style = MaterialTheme.typography.labelSmall) }
+                        TextButton(onClick = refreshWorkforce) { Text("Sync") }
+                    }
+                    if (officeEvents.isEmpty()) EmptyState("No recorded activity", "Events appear here after real worker, task, meeting or provider actions.")
+                    else LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 10.dp)) {
+                        items(officeEvents) { event -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(event.type.replace('.', ' ').replace('_', ' '), style = MaterialTheme.typography.titleSmall)
+                            Text("${event.payload} · ${event.createdAt}", style = MaterialTheme.typography.bodySmall)
+                            if (event.taskId != null) Text("Task ${event.taskId.take(8)}", style = MaterialTheme.typography.labelSmall)
+                        } } }
+                    }
+                }
+                Section.MEMORY -> Column(Modifier.fillMaxSize().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text("Memory", style = MaterialTheme.typography.headlineSmall); Text(memoryStatus, style = MaterialTheme.typography.labelSmall) }
+                        TextButton(onClick = refreshMemories) { Text("Sync") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("headquarters", "agent", "project").forEach { scopeName -> FilterChip(selected = memoryScope == scopeName, onClick = { memoryScope = scopeName }, label = { Text(scopeName.replaceFirstChar { it.uppercase() }) }) }
+                    }
+                    if (memoryScope == "agent" && workforceAgents.isNotEmpty()) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { items(workforceAgents) { agent -> FilterChip(selected = memoryAgentId == agent.id, onClick = { memoryAgentId = agent.id }, label = { Text(agent.name) }) } }
+                    }
+                    if (memoryScope == "project") OutlinedTextField(memoryProjectKey, { memoryProjectKey = it }, Modifier.fillMaxWidth(), label = { Text("Project key") }, singleLine = true)
+                    OutlinedTextField(memoryDraft, { memoryDraft = it }, Modifier.fillMaxWidth(), label = { Text("Save a memory") }, minLines = 2, maxLines = 4)
+                    Button(onClick = saveMemory, enabled = memoryDraft.isNotBlank() && (memoryScope != "agent" || memoryAgentId != null) && (memoryScope != "project" || memoryProjectKey.isNotBlank())) { Text("Save to NOVA memory") }
+                    if (memories.isEmpty()) EmptyState("No saved memories", "Memory is separate per worker, project, or headquarters and is only read from this authenticated backend.")
+                    else LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) { items(memories) { memory -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) { Text("${memory.scope} · importance ${String.format(Locale.US, "%.1f", memory.importance)}", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium); IconButton(onClick = { scope.launch { try { withContext(Dispatchers.IO) { deleteMemory(base, token, memory.id) }; refreshMemories() } catch (error: Exception) { memoryStatus = error.message ?: "Could not delete memory" } } }) { Icon(Icons.Default.DeleteOutline, "Delete memory") } }
+                        Text(memory.content, style = MaterialTheme.typography.bodySmall)
+                        memory.projectKey?.let { Text("Project $it", style = MaterialTheme.typography.labelSmall) }
+                    } } } }
+                }
+                Section.INTEGRATIONS -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 12.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Integration manager", style = MaterialTheme.typography.headlineSmall)
+                    Text("Only connections backed by NOVA APIs are shown as connected. Model-provider/gateway access is separate from external app integrations and from each worker identity.", style = MaterialTheme.typography.bodySmall)
+                    Card { Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Configured model runtime", style = MaterialTheme.typography.titleMedium)
+                        Text(if (providerConfigured) "${providerKeySource.replace('_', ' ')} · ${providerModel}" else "No runtime provider credential detected", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = openProviderSettings) { Text("Manage runtime provider") }
+                    } }
+                    Card { Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Restricted gateway connections · ${providerConnections.size}", style = MaterialTheme.typography.titleMedium)
+                        providerConnections.forEach { connection ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) { Text(connection.provider, style = MaterialTheme.typography.bodyMedium); Text("${connection.status} · ${connection.models.size} discovered model IDs", style = MaterialTheme.typography.labelSmall) }
+                                TextButton(enabled = !providerBusy, onClick = { providerBusy = true; scope.launch { try { val models = withContext(Dispatchers.IO) { testProviderConnectionById(base, token, connection.id) }; registryStatus = "Catalog test passed · ${models.size} models"; refreshWorkforce() } catch (error: Exception) { registryStatus = error.message ?: "Connection test failed" } finally { providerBusy = false } } }) { Text("Test") }
+                                TextButton(enabled = !providerBusy, onClick = { providerBusy = true; scope.launch { try { withContext(Dispatchers.IO) { removeProviderConnection(base, token, connection.id) }; refreshWorkforce() } catch (error: Exception) { registryStatus = error.message ?: "Disconnect failed" } finally { providerBusy = false } } }) { Text("Disconnect") }
+                            }
+                        }
+                        if (providerConnections.isEmpty()) Text("No gateway connections are stored for this API key.", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { providerDialog = true; registryKey = ""; registryStatus = "" }) { Text("Connect supported gateway") }
+                        if (registryStatus.isNotBlank()) Text(registryStatus, style = MaterialTheme.typography.labelSmall)
+                    } }
+                    Card { Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text("External applications", style = MaterialTheme.typography.titleMedium)
+                        Text("GitHub repositories/Actions, Claude Code, Arena.ai account OAuth, and general IDE control are not connected by this app build. No OAuth flow, integration credential, or external action is fabricated here. Use an operator-managed supported gateway for model access; it does not grant repository or IDE access.", style = MaterialTheme.typography.bodySmall)
+                        Text("OpenAI, Anthropic, and Gemini are provider adapters when configured by the backend; provider use is not an app integration or a verified live connection.", style = MaterialTheme.typography.bodySmall)
+                    } }
+                }
+                Section.SETTINGS -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 12.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("Settings center", style = MaterialTheme.typography.headlineSmall)
+                    SettingsCategory("Account & application", "NOVA Android · signed in through the scoped API token. There is no separate account/OAuth service in this build.")
+                    SettingsCategory("Backend connection", "$backendStatus · ${base.ifBlank { "No HTTPS URL configured" }}", "Configure / test") { showSettings = true; testBackendConnection() }
+                    SettingsCategory("AI providers & gateways", if (providerConfigured) "Runtime provider configured · $providerModel" else "No backend runtime provider configured", "Runtime settings") { openProviderSettings() }
+                    SettingsCategory("Worker management", "${workforceAgents.size} persisted workers · individual instructions, model selection, and bounded controls", "Open workers") { section = Section.AGENTS }
+                    SettingsCategory("Model management", "Each worker retains one selected provider/model identity. Gateway routing remains a separate credential connection.", "Manage models") { openProviderSettings() }
+                    SettingsCategory("External integrations", "${providerConnections.size} restricted gateway connection(s). GitHub, IDEs, OAuth integrations, and external actions are not connected by this build.", "Integration manager") { section = Section.INTEGRATIONS }
+                    SettingsCategory("Memory & data", "Owner-scoped worker, project, and headquarters memory; conversation and task data stays on the configured backend.", "Manage memory") { section = Section.MEMORY }
+                    SettingsCategory("Notifications", "Push notifications are not implemented; NOVA does not claim background notification delivery.")
+                    SettingsCategory("Appearance & animations", "OLED-friendly dark palette is active. The office and assistant orb use lightweight Compose animations; motion controls are not exposed yet.")
+                    SettingsCategory("Security & permissions", "Scoped API key stored with Android Keystore. HTTPS only. Upstream provider keys and backend admin credentials stay server-side.")
+                    SettingsCategory("Advanced configuration", "$usageSummary\n$analyticsNote")
+                }
             }
+        }
+        CompactAssistantDock(
+            mood = if (assistantListening) AssistantMood.LISTENING else if (assistantResponding) AssistantMood.RESPONDING else if (busy) AssistantMood.THINKING else AssistantMood.IDLE,
+            draft = draft,
+            onDraftChange = { draft = it },
+            enabled = !busy,
+            onOrbClick = { assistantExpanded = true },
+            onSend = sendAssistantMessage,
+            onAttach = { attachmentLauncher.launch(arrayOf("text/plain", "text/markdown", "application/json", "text/csv")) },
+            onVoice = {
+                assistantListening = true
+                try { voiceLauncher.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) }
+catch (_: Exception) { assistantListening = false; voiceStatus = "Speech recognition is unavailable on this device." }
+            },
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+        )
+        }
+      }
+    }
+    if (assistantExpanded) ModalBottomSheet(onDismissRequest = { assistantExpanded = false }, containerColor = Color(0xFF101827)) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.82f).padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AssistantOrb(if (assistantListening) AssistantMood.LISTENING else if (assistantResponding) AssistantMood.RESPONDING else if (busy) AssistantMood.THINKING else AssistantMood.IDLE, diameter = 48.dp)
+                Column(Modifier.weight(1f).padding(start = 10.dp)) { Text("NOVA assistant", style = MaterialTheme.typography.titleLarge); Text(status, style = MaterialTheme.typography.labelSmall, maxLines = 2) }
+                IconButton(onClick = { conversationId = null; chat.clear(); status = "New conversation" }) { Icon(Icons.Default.AddComment, "New conversation") }
+                IconButton(onClick = { showHistory = true; historyStatus = "Loading history…"; scope.launch { try { val loaded = withContext(Dispatchers.IO) { fetchConversations(base, token) }; conversations.clear(); conversations.addAll(loaded); historyStatus = if (loaded.isEmpty()) "No saved conversations yet." else "Select a conversation to continue." } catch (error: Exception) { historyStatus = error.message ?: "Could not load history" } } }) { Icon(Icons.Default.History, "Conversation history") }
+            }
+            LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (chat.isEmpty()) item { EmptyState("Ready when you are", "Responses use your configured NOVA backend. Offline states are shown rather than fabricated.") }
+                items(chat) { line -> ChatBubble(line, speakResponse) }
+                if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            }
+            CompactAssistantDock(mood = if (assistantListening) AssistantMood.LISTENING else if (assistantResponding) AssistantMood.RESPONDING else if (busy) AssistantMood.THINKING else AssistantMood.IDLE, draft = draft, onDraftChange = { draft = it }, enabled = !busy, onOrbClick = { assistantExpanded = false }, onSend = sendAssistantMessage, onAttach = { attachmentLauncher.launch(arrayOf("text/plain", "text/markdown", "application/json", "text/csv")) }, onVoice = { assistantListening = true; try { voiceLauncher.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) } catch (_: Exception) { assistantListening = false; voiceStatus = "Speech recognition is unavailable on this device." } }, modifier = Modifier.fillMaxWidth().padding(bottom = 18.dp))
         }
     }
     if (showProviderSettings) AlertDialog(
@@ -664,7 +933,8 @@ private fun NovaApp(settings: SecureSettings) {
                 Text("Model: ${agent.provider}/${agent.model}", style = MaterialTheme.typography.bodySmall)
                 val currentTask = workforceTasks.firstOrNull { it.assignedAgentId == agent.id && it.state == "RUNNING" }
                 Text("Current task: ${currentTask?.title ?: "No running task in latest snapshot"}", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { selectedOfficeAgent = null; section = Section.TASKS }, enabled = workforceTasks.isNotEmpty()) { Text("Open saved task controls") }
+                TextButton(onClick = { requestedTaskAgentId = agent.id; selectedOfficeAgent = null; section = Section.TASKS }) { Text("Assign a task to ${agent.name}") }
+                TextButton(onClick = { selectedOfficeAgent = null; section = Section.AGENTS; editingAgent = agent }) { Text("Worker settings & controls") }
                 Text("Specialties: ${agent.specialties.joinToString().ifBlank { "Not configured" }}", style = MaterialTheme.typography.bodySmall)
                 Text("Tools: ${agent.permissions.joinToString().ifBlank { "None enabled" }}", style = MaterialTheme.typography.bodySmall)
                 Text("Saved position: ${officeWorld?.characters?.get(agent.id)?.let { "${it.x}, ${it.y} · ${it.movementState}" } ?: "Unavailable"}", style = MaterialTheme.typography.bodySmall)
@@ -740,6 +1010,8 @@ private fun NovaApp(settings: SecureSettings) {
                 OutlinedTextField(value = base, onValueChange = { base = it }, label = { Text("HTTPS backend URL") }, singleLine = true)
                 OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("Scoped NOVA API token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 Text("The token is encrypted with Android Keystore on this device. Use an API key with only the scopes needed.", style = MaterialTheme.typography.bodySmall)
+                Text(backendStatus, style = MaterialTheme.typography.labelMedium, color = if (backendStatus.startsWith("Connected") || backendStatus.startsWith("Backend online")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                TextButton(enabled = !backendBusy, onClick = testBackendConnection) { Text(if (backendBusy) "Checking…" else "Test connection & retry") }
             }
         },
         confirmButton = {
@@ -747,7 +1019,8 @@ private fun NovaApp(settings: SecureSettings) {
                 settings.put("base", base.trim().trimEnd('/'))
                 settings.put("token", token.trim())
                 showSettings = false
-                status = "Connection settings saved. Send a message to verify."
+                status = "Connection settings saved. Checking backend health and API authentication…"
+                testBackendConnection()
             }) { Text("Save") }
         },
         dismissButton = {
@@ -787,6 +1060,46 @@ private fun NovaApp(settings: SecureSettings) {
         }
     }
 }
+@Composable
+private fun CompactAssistantDock(
+    mood: AssistantMood,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    enabled: Boolean,
+    onOrbClick: () -> Unit,
+    onSend: () -> Unit,
+    onAttach: () -> Unit,
+    onVoice: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier, shape = RoundedCornerShape(30.dp), colors = CardDefaults.cardColors(containerColor = Color(0xF21B2637)), elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+            AssistantOrb(mood, Modifier, diameter = 48.dp, onClick = onOrbClick)
+            Spacer(Modifier.width(5.dp))
+            TextField(value = draft, onValueChange = onDraftChange, modifier = Modifier.weight(1f), enabled = enabled, singleLine = true, placeholder = { Text("Ask NOVA…", style = MaterialTheme.typography.bodySmall) }, shape = RoundedCornerShape(24.dp), colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
+            IconButton(enabled = enabled, onClick = onAttach) { Icon(Icons.Default.AttachFile, "Attach UTF-8 text file") }
+            IconButton(enabled = enabled, onClick = onVoice) { Icon(Icons.Default.Mic, "Dictate message") }
+            IconButton(enabled = enabled && draft.isNotBlank(), onClick = onSend) { Icon(Icons.Default.Send, "Send to NOVA") }
+        }
+    }
+}
+
+@Composable
+private fun NovaDrawerItem(target: Section, selected: Section, icon: androidx.compose.ui.graphics.vector.ImageVector, label: String = target.title, onClick: () -> Unit) {
+    NavigationDrawerItem(label = { Text(label) }, selected = selected == target, icon = { Icon(icon, label) }, onClick = onClick, modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding))
+}
+
+@Composable
+private fun SettingsCategory(title: String, detail: String, action: String? = null, onClick: (() -> Unit)? = null) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF121D2B))) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (action != null && onClick != null) TextButton(onClick = onClick) { Text(action) }
+        }
+    }
+}
+
 @Composable private fun EmptyState(title: String, message: String) { Column(Modifier.fillMaxWidth().padding(top = 36.dp), horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.AutoAwesome, title, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(42.dp)); Spacer(Modifier.height(10.dp)); Text(title, style = MaterialTheme.typography.titleMedium); Text(message, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
 @Composable private fun DashboardCard(title: String, message: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) { Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, title, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp)); Column { Text(title, fontWeight = FontWeight.SemiBold); Text(message, style = MaterialTheme.typography.bodySmall) } } } }
 
@@ -797,16 +1110,38 @@ private fun checkedBase(base: String, token: String): String {
     if (token.isBlank()) throw IOException("Configure a scoped NOVA API token in Settings")
     return base.trimEnd('/')
 }
-private fun sendMessage(base: String, token: String, text: String, conversationId: String?): ChatResult {
+private fun sendMessageStreaming(base: String, token: String, text: String, conversationId: String?, onDelta: (String) -> Unit): ChatResult {
     val root = JSONObject().put("message", text)
     if (conversationId != null) root.put("conversation_id", conversationId)
-    val payload = root.toString().toRequestBody("application/json".toMediaType())
-    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/assistant/chat").header("Authorization", "Bearer $token").post(payload).build()
+    val request = Request.Builder().url("${checkedBase(base, token)}/api/v1/assistant/chat/stream")
+        .header("Authorization", "Bearer $token").header("Accept", "text/event-stream")
+        .post(root.toString().toRequestBody("application/json".toMediaType())).build()
     http.newCall(request).execute().use { response ->
-        if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}: ${response.body?.string()?.take(240) ?: "No response body"}")
-        val body = response.body?.string() ?: throw IOException("Empty response from NOVA backend")
-        val json = JSONObject(body)
-        return ChatResult(json.getString("response"), json.getString("conversation_id"))
+        if (!response.isSuccessful) throw IOException("NOVA stream returned HTTP ${response.code}; verify backend version and token scope")
+        val source = response.body?.source() ?: throw IOException("NOVA returned an empty stream")
+        var event = "message"; var data = StringBuilder(); var completed = false; var id = conversationId; val result = StringBuilder()
+        fun dispatchEvent() {
+            if (data.isEmpty()) { event = "message"; return }
+            val json = try { JSONObject(data.toString()) } catch (_: Exception) { throw IOException("NOVA sent malformed streaming data") }
+            when (event) {
+                "meta" -> id = json.optString("conversation_id").takeIf { it.isNotBlank() && it != "null" } ?: id
+                "delta" -> json.optString("text").takeIf { it.isNotEmpty() }?.let { result.append(it); onDelta(it) }
+                "done" -> { id = json.optString("conversation_id").takeIf { it.isNotBlank() && it != "null" } ?: id; completed = true }
+                "error" -> throw IOException(json.optString("message", "NOVA stream failed; retry starts a new generation."))
+            }
+            event = "message"; data = StringBuilder()
+        }
+        while (!source.exhausted()) {
+            val line = source.readUtf8Line() ?: break
+            when {
+                line.startsWith("event:") -> event = line.substringAfter(':').trim()
+                line.startsWith("data:") -> { if (data.isNotEmpty()) data.append('\n'); data.append(line.substringAfter(':').trimStart()) }
+                line.isEmpty() -> dispatchEvent()
+            }
+        }
+        if (data.isNotEmpty()) dispatchEvent()
+        if (!completed || id.isNullOrBlank()) throw IOException("Stream was interrupted before completion. Retry starts a new generation.")
+        return ChatResult(result.toString(), id!!)
     }
 }
 private fun fetchProviderConfiguration(base: String, token: String): ProviderConfig {
@@ -885,7 +1220,7 @@ private fun loadWorkforce(base: String, token: String): WorkforceSnapshot<List<W
     val tasksJson = org.json.JSONArray(authorizedRequest(base, token, "/api/v1/tasks"))
     val tasks = (0 until tasksJson.length()).map { i -> tasksJson.getJSONObject(i).let { item ->
         val checkpoint = item.optJSONObject("checkpoint") ?: JSONObject()
-        WorkforceTask(item.getString("id"), item.optString("title", "Task"), item.optString("state", "RECEIVED"), item.optString("result").takeIf { value -> value.isNotBlank() && value != "null" }, item.optString("error_detail").takeIf { value -> value.isNotBlank() && value != "null" }, item.optInt("priority", 50), item.optString("assigned_agent_id").takeIf { value -> value.isNotBlank() && value != "null" }, checkpoint.optInt("progress_percent", 0).coerceIn(0,100), checkpoint.optString("stage", "queued"))
+        WorkforceTask(item.getString("id"), item.optString("title", "Task"), item.optString("state", "RECEIVED"), item.optString("result").takeIf { value -> value.isNotBlank() && value != "null" }, item.optString("error_detail").takeIf { value -> value.isNotBlank() && value != "null" }, item.optInt("priority", 50), item.optString("assigned_agent_id").takeIf { value -> value.isNotBlank() && value != "null" }, item.optString("requested_agent_id").takeIf { value -> value.isNotBlank() && value != "null" }, checkpoint.optInt("progress_percent", 0).coerceIn(0,100), checkpoint.optString("stage", "queued"))
     } }
     val eventsJson = org.json.JSONArray(authorizedRequest(base, token, "/api/v1/events/recent?limit=100"))
     val events = (0 until eventsJson.length()).map { i -> eventsJson.getJSONObject(i).let { OfficeEvent(it.optString("event_type", "event"), it.optString("agent_id").takeIf { value -> value.isNotBlank() && value != "null" }, it.optString("task_id").takeIf { value -> value.isNotBlank() && value != "null" }, it.optString("created_at"), it.optJSONObject("payload")?.toString() ?: "{}") } }
@@ -917,6 +1252,14 @@ private fun loadWorkforceAnalytics(base: String, token: String): List<AgentAnaly
     return (0 until result.length()).map { i -> result.getJSONObject(i).let { item ->
         AgentAnalytics(item.optString("identity"), item.optString("name"), item.optString("backend_status"), item.optInt("assignments_recorded"), item.optInt("completed_assignments"), item.optInt("failed_assignments"), item.optInt("active_assignments"), if (item.isNull("average_completed_assignment_seconds")) null else item.optDouble("average_completed_assignment_seconds"), item.optInt("completed_duration_samples"), item.optInt("provider_requests_recorded"), item.optInt("provider_requests_succeeded"), item.optInt("provider_requests_failed"), item.optInt("reported_input_tokens"), item.optInt("reported_output_tokens"))
     } }
+}
+
+private fun agentActivity(status: String): String = when (status.lowercase()) {
+    "working" -> "Working / executing"
+    "paused" -> "Resting · paused"
+    "error", "failed" -> "Needs attention"
+    "idle", "available" -> "Resting · available"
+    else -> status.replace('_', ' ').ifBlank { "Status unavailable" }
 }
 
 private fun analyticsDuration(metric: AgentAnalytics): String = metric.durationSeconds?.let {
@@ -957,9 +1300,11 @@ private fun createMeetingHandoff(base:String,token:String,meetingId:String,taskI
     authorizedRequest(base,token,"/api/v1/meetings/$meetingId/handoffs","POST",JSONObject().put("task_id",taskId).put("agent_id",agentId).put("instructions",instructions))
 }
 
-private fun createWorkforceTask(base: String, token: String, title: String, description: String, dependencies: List<String>) {
+private fun createWorkforceTask(base: String, token: String, title: String, description: String, dependencies: List<String>, requestedAgentId: String?) {
     val dependencyArray = org.json.JSONArray().also { array -> dependencies.forEach { array.put(it) } }
-    authorizedRequest(base, token, "/api/v1/tasks", "POST", JSONObject().put("title", title).put("description", description).put("dependencies", dependencyArray))
+    val body = JSONObject().put("title", title).put("description", description).put("dependencies", dependencyArray)
+    requestedAgentId?.let { body.put("requested_agent_id", it) }
+    authorizedRequest(base, token, "/api/v1/tasks", "POST", body)
 }
 
 private fun controlWorkforceAgent(base: String, token: String, agentId: String, action: String) {
@@ -1037,6 +1382,38 @@ private fun removeProviderConnection(base: String, token: String, id: String) {
 private fun testProviderConnectionById(base: String, token: String, id: String): List<String> {
     val response = JSONObject(authorizedRequest(base, token, "/api/v1/providers/connections/$id/test", "POST"))
     return jsonStrings(response.optJSONArray("model_ids"))
+}
+
+private fun checkBackendConnection(base: String, token: String): String {
+    if (!base.startsWith("https://")) throw IOException("Set an HTTPS backend URL in Settings")
+    val root = base.trimEnd('/')
+    val healthRequest = Request.Builder().url("$root/health").get().build()
+    http.newCall(healthRequest).execute().use { response ->
+        if (!response.isSuccessful) throw IOException("Backend health check returned HTTP ${response.code}")
+        val json = JSONObject(response.body?.string() ?: "{}")
+        if (json.optString("status") != "ok") throw IOException("Backend health endpoint did not report ready")
+    }
+    if (token.isBlank()) return "Backend online · scoped API token required"
+    val agents = org.json.JSONArray(authorizedRequest(base, token, "/api/v1/agents"))
+    return "Connected · authenticated · ${agents.length()} workers"
+}
+
+private fun loadMemories(base: String, token: String): List<MemoryItem> {
+    val rows = org.json.JSONArray(authorizedRequest(base, token, "/api/v1/memories"))
+    return (0 until rows.length()).map { index -> rows.getJSONObject(index).let { item ->
+        MemoryItem(item.getString("id"), item.optString("scope", "agent"), item.optString("content", ""), item.optString("agent_id").takeIf { it.isNotBlank() && it != "null" }, item.optString("project_key").takeIf { it.isNotBlank() && it != "null" }, item.optDouble("importance", 0.5))
+    } }
+}
+
+private fun createMemory(base: String, token: String, scope: String, content: String, agentId: String?, projectKey: String) {
+    val body = JSONObject().put("scope", scope).put("content", content)
+    if (scope == "agent") body.put("agent_id", agentId ?: throw IOException("Choose a worker for worker-scoped memory"))
+    if (scope == "project") body.put("project_key", projectKey.takeIf { it.isNotBlank() } ?: throw IOException("Enter a project key"))
+    authorizedRequest(base, token, "/api/v1/memories", "POST", body)
+}
+
+private fun deleteMemory(base: String, token: String, id: String) {
+    authorizedRequest(base, token, "/api/v1/memories/$id", "DELETE")
 }
 
 private fun loadResourceOverview(base: String, token: String): String {

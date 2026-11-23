@@ -21,14 +21,14 @@ This checklist is based on the unfinished items from the prior implementation re
 - [ ] Automatically select movement destinations from actual task/meeting assignment events.
 - [x] Android scene renders persisted room/furniture grid and agent positions; profile routes agents to saved room entrances and animation follows backend-persisted A* steps.
 - [x] Android office editor changes room geometry/entrances and adds, moves, rotates, or removes furniture through the owner-scoped validated backend layout API. Directional sprite frames and furniture-object actions remain absent; Android build is unverified locally.
-- [~] Scene characters open live profiles, saved room navigation, and persistent direct chat; assignment-driven room visits and pause/stop controls remain unimplemented.
+- [~] Scene characters open live profiles and saved room navigation; persisted task assignment preferences are available, while assignment-driven room visits and furniture-object actions remain unimplemented.
 - [ ] Interactive office objects connected to real profile/task/meeting/provider actions.
 
 ### Employee operations and collaboration
 
 - [x] Persistent role identities, per-agent model/provider/instructions, task execution, owner-scoped memory, and message records.
 - [x] Direct employee chat endpoint/UI uses the selected agent's persisted instructions, configured provider/model, bounded history, owner-scoped conversation persistence, and real provider responses; mocked API tests cover routing, history, and owner isolation.
-- [~] Profile shows current assigned task, persisted saved-chat history, identity/model/permissions, and navigation. Owner-scoped pause/resume and cooperative stop controls are connected in Android Agents; direct worker/task assignment and memory-management controls remain absent.
+- [~] Profile shows current assigned task, persisted saved-chat history, identity/model/permissions, and navigation. Owner-scoped pause/resume and cooperative stop controls are connected in Android Agents; per-worker direct execution and fine-grained memory editing controls remain limited; task creation now supports a preferred primary worker.
 - [~] Persisted owner-scoped meetings, scheduled dispatch, invitations/responses, provider-backed participation, shared context/transcripts, status events, and task handoffs are implemented and covered by tests/UI. Separate collaborative rooms, shared documents, and approvals remain.
 - [x] Bounded participant count, provider-call timeout use, owner isolation, and meeting participation tests; independent employee identities are still represented by owner-selected agent records (no separate employee principal).
 
@@ -50,10 +50,20 @@ This checklist is based on the unfinished items from the prior implementation re
 
 ### Verification and delivery
 
-- [x] Backend tests: `85 passed, 1 skipped, 1 warning`; backend/office-engine/tests `compileall` and `git diff --check` pass for the current worktree.
+- [x] Backend tests for this then-current worktree: `87 passed, 1 skipped, 1 warning`; backend/office-engine/tests `compileall` and `git diff --check` pass.
 - [x] Official Gradle Wrapper v8.9.0 added from the Gradle v8.9.0 source release; compatible project config is AGP 8.7.3 + Gradle 8.9 + Kotlin 2.0.21 + JDK 17 + Android SDK 35.
 - [x] Android Actions run 45187971363 passed on source SHA `e15b49cb8e9643cc3dd9e25688feaa22da746fb2`: JDK 17/SDK 35 setup, unit tests, lint, debug APK assembly, artifact verification, and upload all succeeded. Artifact: `nova-debug-apk` at https://github.com/rsak0730-cmyk/2D-AGENT/actions/runs/45187971363 (sandbox download attempt returned EOF from the artifact host).
 - [ ] Local Android build/JUnit remains blocked because this environment has no Java/JDK or Android SDK. Current `./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug` exits before Gradle startup: `JAVA_HOME is not set and no 'java' command could be found`.
 - [x] Static secret-pattern scan found no high-confidence API/private-key patterns; workflow contains no injected secrets. App uses scoped API auth and Android Keystore storage; admin API remains backend-only.
 - [~] Provider keys remain server-side and compatible-gateway tokens are encrypted; Actions produced the APK, but APK contents were not independently inspected in this sandbox because artifact download failed.
 - [ ] PostgreSQL multi-replica lock/event-bus integration and live provider compatibility require infrastructure/credentials not present locally.
+
+
+### Current HQ / assistant / requested-worker increment
+
+- [x] Pixel-art Headquarters is the default and visually dominant Android home; command drawer and clean destinations expose Workers, Projects, Activity, Memory, and Settings. Worker sprites open their profile; task creation offers preferred-worker selection.
+- [x] Compact persistent assistant dock, expandable conversation/history, animated globe/orb activity states, device speech recognition, and streaming response rendering are wired into Android. Selected text-like files (up to 256 KB UTF-8) are read locally and appended to the outgoing message. Binary/large files and multipart uploads are unsupported.
+- [x] Owner-scoped `POST /api/v1/assistant/chat/stream` emits `meta`/`delta`/`done`/`error` SSE events and saves a response only after successful completion; two tests cover persistence and cross-owner rejection.
+- [x] Optional task preferred-worker field is persisted and owner-validated. The preferred employee owns the primary/core assignment, while the manager can retain helper delegation. PostgreSQL migration 0009 adds the reference; existing SQLite files need a manual migration.
+- [x] Current backend checks: `compileall`, full pytest `87 passed, 1 skipped, 1 warning`, and `git diff --check`.
+- [ ] Android build/tests/lint/APK for this source are pending CI; no local JDK or SDK is installed. Earlier Actions results are from an older SHA and do not verify this change. Live upstream/provider and deployment acceptance are unrun.

@@ -48,6 +48,17 @@ curl https://nova.example.org/v1/messages \
 - `POST /api/v1/agents/{agent_id}/chat` (`agents:write`) submits a user message to that employee's configured model/provider, using its saved instructions and bounded history. User messages and real provider replies are persisted separately; provider failures do not create fabricated assistant messages.
 - PostgreSQL deployments must apply `database/migrations/0005_agent_chat.sql`; new local databases create the tables automatically.
 
+## Assistant chat streaming
+
+- `POST /api/v1/assistant/chat/stream` requires `assistant:read` and `assistant:write`; request fields match the ordinary assistant chat request (`message`, optional `conversation_id`, optional `model`). The response uses SSE `meta`, incremental `delta`, `done`, and sanitized `error` events. Conversation ownership is checked before generation, user messages are saved before streaming, and assistant text is persisted only after an upstream stream completes successfully.
+- The Android assistant consumes this endpoint and paints deltas as they arrive. Disconnects/errors do not create a completed assistant record; retry starts a new provider generation. Voice input uses the device recognizer; text-like files up to 256 KB are read locally and appended to the message; binary/large files and multipart uploads are unsupported.
+- This endpoint relies on existing conversation tables; new local databases create them automatically. Existing SQLite databases are not automatically migrated.
+
+## Requested task worker
+
+- Task creation accepts optional owner-scoped `requested_agent_id`. The selected employee is the primary/core assignment preference; the Head Manager retains plan validation and may assign helper subtasks to other employees. The API rejects IDs belonging to another owner. Deleting the selected employee clears the reference.
+- PostgreSQL deployments must apply `database/migrations/0009_requested_task_worker.sql` after migration 0008. Existing SQLite databases need a manual schema migration/backup; `create_all` does not add columns.
+
 ## Meetings and collaboration
 
 - `POST /api/v1/meetings` (`agents:write`) creates a persisted meeting with title, agenda, optional timezone-aware schedule, shared project context, optional linked task, and 1–10 owner-scoped employee invitations.
@@ -61,7 +72,7 @@ curl https://nova.example.org/v1/messages \
 - `GET /api/v1/office/state` (`agents:read`) creates/returns the owner's default 11-room layout and persistent agent grid positions.
 - `PUT /api/v1/office/layout` (`office:write`) replaces the room/furniture layout after bounds, overlap, footprint, entrance, and saved-position validation. Layout edits are rejected while agents have active movement.
 - `POST /api/v1/office/agents/{agent_id}/move` (`office:write`) calculates and saves an A* route or FIFO queued move; `/step` advances one collision-checked cell and persists it; `/cancel-move` stops at the last saved tile.
-- The SQLAlchemy `create_all` path creates these tables for new local DBs. PostgreSQL deployments must apply migrations through `database/migrations/0008_shared_event_delivery.sql`. Existing SQLite DBs are not automatically migrated.
+- The SQLAlchemy `create_all` path creates these tables for new local DBs. PostgreSQL deployments must apply migrations through `database/migrations/0009_requested_task_worker.sql`. Existing SQLite DBs are not automatically migrated.
 
 The Android HQ reads this saved state, provides an editor for room geometry/entrances and furniture placement, and advances walking through persisted `/step` requests. `office:write` is required for layout edits and movement; invalid collision/position changes are rejected by the server.
 

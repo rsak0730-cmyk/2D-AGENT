@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -8,17 +9,17 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy import or_
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from .auth import digest, new_secret, require_admin, require_scope
 from .config import get_settings
-from .db import Base, engine, get_db
+from .db import Base, engine, get_db, SessionLocal
 from .credentials import decrypt_secret, rotate_secret
 from .models import ActivityEvent, Agent, ApiKey, Conversation, ConversationMessage, Meeting, MeetingInvitation, ProviderConnection, ProviderCredential, ResourceSetting, Task, TaskAssignment, UsageRecord
 from .providers import list_models
 from .schemas import AgentCreate, AgentUpdate, AgentView, ChatRequest, ChatResponse, CheckpointUpdate, ConversationDetail, ConversationView, KeyCreate, KeyView, ProviderConfigurationView, ProviderConnectionTest, ProviderCredentialUpdate, TaskCreate, TaskView
-from .routing import invoke_owner
+from .routing import invoke_owner, open_owner_stream
 from .workforce import router as workforce_router, set_publisher
 from .office import router as office_router
 from .compat import router as compatibility_router
@@ -234,6 +235,8 @@ def create_task(body: TaskCreate, db: Session = Depends(get_db), key: ApiKey = D
             raise HTTPException(422, "Every dependency must identify a task owned by this NOVA key")
         if any(task.state in {"FAILED", "CANCELLED"} for task in prerequisites):
             raise HTTPException(409, "A failed or cancelled task cannot be a dependency")
+    if body.requested_agent_id is not None and not db.query(Agent).filter(Agent.id == body.requested_agent_id, Agent.owner_key_id == key.id).first():
+        raise HTTPException(422, "Requested worker must belong to this NOVA API key")
     row = Task(owner_key_id=key.id, **body.model_dump()); db.add(row); db.commit(); db.refresh(row)
     db.add(ActivityEvent(owner_key_id=key.id, task_id=row.id, event_type="task.created", payload={"state":row.state,"priority":row.priority})); db.commit()
     return row
@@ -280,6 +283,85 @@ async def chat(body: ChatRequest, db: Session = Depends(get_db), key: ApiKey = D
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
     return ChatResponse(response=text, provider=provider_name, model=model, conversation_id=conversation.id)
+
+
+@app.post("/api/v1/assistant/chat/stream")
+async def chat_stream(body: ChatRequest, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:write"))):
+    """Stream incremental text while retaining the ordinary owner-scoped conversation history."""
+    if body.conversation_id:
+        conversation = db.query(Conversation).filter(Conversation.id == body.conversation_id, Conversation.owner_key_id == key.id).first()
+        if conversation is None: raise HTTPException(404, "Conversation not found")
+    else:
+        conversation = Conversation(owner_key_id=key.id, title=body.message[:157] + ("..." if len(body.message) > 157 else ""))
+        db.add(conversation); db.commit(); db.refresh(conversation)
+    previous = (db.query(ConversationMessage).filter(ConversationMessage.conversation_id == conversation.id, ConversationMessage.status == "complete").order_by(ConversationMessage.created_at.desc()).limit(20).all())
+    history = [{"role": item.role, "content": item.content} for item in reversed(previous) if item.role in {"user", "assistant"}]
+    if sum(len(item["content"]) for item in history) + len(body.message) > get_settings().max_prompt_characters:
+        raise HTTPException(413, "Request exceeds the configured prompt-size limit")
+    db.add(ConversationMessage(conversation_id=conversation.id, role="user", content=body.message, status="complete"))
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    model_id = body.model or get_settings().model
+    messages = history + [{"role":"user", "content":body.message}]
+    upstream, provider_name, fallback = await open_owner_stream(db, key, model_id, messages, 0.2, get_settings().max_completion_tokens)
+    conversation_id = conversation.id
+    owner_id = key.id
+    request_id = "nova-chat-" + uuid4().hex
+    from .compat_stream import openai_stream
+    source = openai_stream(upstream, owner_id, provider_name, fallback, model_id, request_id)
+
+    async def emit_events():
+        response_text = ""
+        completed = False
+        had_error = False
+        def frame(event: str, payload: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        try:
+            yield frame("meta", {"conversation_id":conversation_id,"provider":provider_name,"model":model_id})
+            async for upstream_frame in source:
+                for line in upstream_frame.splitlines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        completed = True
+                        continue
+                    try: chunk = json.loads(payload)
+                    except (ValueError, TypeError): continue
+                    if "error" in chunk:
+                        had_error = True
+                        yield frame("error", chunk["error"])
+                        continue
+                    choices = chunk.get("choices") or []
+                    delta = choices[0].get("delta", {}).get("content") if choices else None
+                    if isinstance(delta, str) and delta:
+                        response_text += delta
+                        yield frame("delta", {"text":delta})
+            if not completed or not response_text or had_error:
+                if not had_error:
+                    yield frame("error", {"message":"Stream ended before a complete response; retry starts a new generation."})
+                return
+            writer = SessionLocal()
+            try:
+                saved_conversation = writer.query(Conversation).filter(Conversation.id == conversation_id, Conversation.owner_key_id == owner_id).first()
+                if saved_conversation is None:
+                    yield frame("error", {"message":"Conversation was removed before the response could be saved."})
+                    return
+                writer.add(ConversationMessage(conversation_id=conversation_id, role="assistant", content=response_text, model=upstream.model, status="complete"))
+                saved_conversation.updated_at = datetime.now(timezone.utc)
+                writer.commit()
+            finally:
+                writer.close()
+            yield frame("done", {"conversation_id":conversation_id,"provider":provider_name,"model":upstream.model})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            yield frame("error", {"message":"NOVA stream failed; retry starts a new generation."})
+        finally:
+            await source.aclose()
+            await upstream.close()
+
+    return StreamingResponse(emit_events(), media_type="text/event-stream", headers={"cache-control":"no-cache","connection":"keep-alive","x-accel-buffering":"no","x-nova-provider":provider_name,"x-nova-fallback":str(fallback).lower()})
 
 @app.get("/api/v1/assistant/conversations", response_model=list[ConversationView])
 def list_conversations(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("assistant:read"))):
