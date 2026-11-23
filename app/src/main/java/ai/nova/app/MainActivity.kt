@@ -704,9 +704,9 @@ private fun NovaApp(settings: SecureSettings) {
                             try {
                                 val result = withContext(Dispatchers.IO) { sendAgentChat(base, token, agent.id, prompt, agentChatConversationId) }
                                 if (selectedOfficeAgent?.id == agent.id) {
-                                    agentChatConversationId = result.first
-                                    agentChatLines.add(ChatLine(result.second, false))
-                                    agentChatStatus = "Response from ${result.third}/${result.fourth} · saved"
+                                    agentChatConversationId = result.conversationId
+                                    agentChatLines.add(ChatLine(result.response, false))
+                                    agentChatStatus = "Response from ${result.provider}/${result.model} · saved"
                                 }
                             } catch (e: Exception) {
                                 if (selectedOfficeAgent?.id == agent.id) agentChatStatus = e.message ?: "Employee chat request failed; no response was fabricated."
