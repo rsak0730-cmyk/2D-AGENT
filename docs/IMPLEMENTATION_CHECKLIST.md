@@ -67,3 +67,13 @@ This checklist is based on the unfinished items from the prior implementation re
 - [x] Optional task preferred-worker field is persisted and owner-validated. The preferred employee owns the primary/core assignment, while the manager can retain helper delegation. PostgreSQL migration 0009 adds the reference; existing SQLite files need a manual migration.
 - [x] Current backend checks: `compileall`, full pytest `87 passed, 1 skipped, 1 warning`, and `git diff --check`; backend validation Actions run 45197777634 passed on `defc2864a14a8d0873ddd5e812ea437554b60c33`.
 - [x] Android build/tests/lint/APK passed in Actions run 45197778179 on `defc2864a14a8d0873ddd5e812ea437554b60c33`; local build remains unavailable because no JDK or SDK is installed. Live upstream/provider and deployment acceptance are unrun.
+
+
+### Living headquarters renderer increment (work in progress)
+
+- [x] Native Compose Canvas night-city/glass-tower scene with distinct pixel-drawn workers, room/furniture sprites, lights, and persisted backend position/task visuals; offline preview never fabricates workers or statuses.
+- [x] Six named department focus areas, tappable rooms/workers, profile activity, pinch zoom/pan, accessible zoom/recenter, and visual indicators tied to persisted routes/messages/meetings.
+- [x] Persistent reduced-motion preference and app/HQ lifecycle pause; simplified drawing detail below the narrow-viewport threshold.
+- [x] Added Memory Core room/furniture to new default office worlds, safe additive upgrade for compatible legacy default grids, and accepted its furniture type through backend validation/editor. API/navigation tests cover default world, compatibility upgrade, and movement/layout regression.
+- [x] Backend checks after this increment: `89 passed, 1 skipped, 1 warning`; `compileall` and `git diff --check` pass.
+- [ ] Android unit tests, lint, and debug APK for the current renderer are pending Actions. Local JDK/SDK is absent. Device frame-time, battery, touch instrumentation, and live backend/provider/deployment acceptance tests remain unrun. Custom layouts with occupied Memory Core footprint are deliberately left untouched.

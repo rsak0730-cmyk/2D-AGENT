@@ -15,9 +15,9 @@ router = APIRouter()
 ROOM_NAMES = [
     ("head-office", "Head Office"), ("development", "Development"), ("design", "Design"), ("research", "Research"),
     ("security", "Security"), ("testing", "Testing"), ("writing", "Writing"), ("meeting", "Meeting Room"),
-    ("server-room", "Server Room"), ("reception", "Reception"), ("break-room", "Break Room"),
+    ("server-room", "Server Room"), ("reception", "Reception"), ("break-room", "Break Room"), ("memory-core", "Memory Core"),
 ]
-ROLE_ROOM = {"manager":"head-office", "android":"development", "web":"development", "game":"development", "backend":"development", "ui-ux":"design", "research":"research", "database":"research", "security":"security", "qa":"testing", "documentation":"writing"}
+ROLE_ROOM = {"manager":"head-office", "android":"development", "web":"development", "game":"development", "backend":"development", "ui-ux":"design", "research":"research", "database":"memory-core", "security":"server-room", "qa":"testing", "documentation":"writing"}
 
 
 def _default_layout(owner_id: str) -> OfficeLayout:
@@ -33,6 +33,8 @@ def _default_layout(owner_id: str) -> OfficeLayout:
             furniture.append({"id":"server-rack", "kind":"server_rack", "x":x+2, "y":y+1, "width":2, "height":1, "rotation":0})
         elif room_id == "break-room":
             furniture.append({"id":"coffee-machine", "kind":"coffee_machine", "x":x+2, "y":y+1, "width":1, "height":1, "rotation":0})
+        elif room_id == "memory-core":
+            furniture.append({"id":"memory-core-console", "kind":"memory_core", "x":x+4, "y":y+1, "width":2, "height":2, "rotation":0})
         else:
             furniture.append({"id":f"{room_id}-desk", "kind":"desk", "x":x+2, "y":y+1, "width":2, "height":1, "rotation":0})
     return OfficeLayout(owner_key_id=owner_id, width=40, height=24, rooms=rooms, furniture=furniture)
@@ -42,11 +44,54 @@ def _furniture(rows: list[dict]) -> list[Furniture]:
     return [Furniture(item["id"], item["kind"], item["x"], item["y"], item.get("width",1), item.get("height",1), item.get("rotation",0)) for item in rows]
 
 
+def _add_memory_department_if_safe(db: Session, owner: ApiKey, layout: OfficeLayout) -> None:
+    """Add the new default department to legacy default grids without disturbing custom layouts."""
+    rooms_by_id = {room.get("id"): room for room in layout.rooms or []}
+    if "memory-core" in rooms_by_id:
+        return
+    legacy_rooms = ROOM_NAMES[:-1]
+    if set(rooms_by_id) != {room_id for room_id, _ in legacy_rooms}:
+        return
+    for index, (room_id, expected_name) in enumerate(legacy_rooms):
+        room = rooms_by_id[room_id]
+        expected_x, expected_y = (index % 4) * 10, (index // 4) * 8
+        if (room.get("name"), room.get("x"), room.get("y"), room.get("width"), room.get("height")) != (expected_name, expected_x, expected_y, 10, 6):
+            return
+    x, y, width, height = 30, 16, 10, 6
+    if layout.width < x + width or layout.height < y + height:
+        return
+    def overlaps(ax, ay, aw, ah, bx, by, bw, bh):
+        return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
+    for room in layout.rooms or []:
+        if overlaps(x, y, width, height, room["x"], room["y"], room["width"], room["height"]):
+            return
+    core_x, core_y, core_w, core_h = x + 4, y + 1, 2, 2
+    for item in layout.furniture or []:
+        if overlaps(core_x, core_y, core_w, core_h, item["x"], item["y"], item.get("width", 1), item.get("height", 1)):
+            return
+    occupied = db.query(OfficeAgentPosition).filter(
+        OfficeAgentPosition.owner_key_id == owner.id,
+        OfficeAgentPosition.x >= core_x, OfficeAgentPosition.x < core_x + core_w,
+        OfficeAgentPosition.y >= core_y, OfficeAgentPosition.y < core_y + core_h,
+    ).first()
+    if occupied:
+        return
+    rooms = list(layout.rooms or [])
+    rooms.append({"id":"memory-core", "name":"Memory Core", "x":x, "y":y, "width":width, "height":height, "entrance":{"x":x+4,"y":y+5}})
+    furniture = list(layout.furniture or [])
+    furniture.append({"id":"memory-core-console", "kind":"memory_core", "x":core_x, "y":core_y, "width":core_w, "height":core_h, "rotation":0})
+    layout.rooms = rooms
+    layout.furniture = furniture
+    db.flush()
+
+
 def _layout(db: Session, owner: ApiKey) -> OfficeLayout:
     row = db.query(OfficeLayout).filter(OfficeLayout.owner_key_id == owner.id).first()
     if row is None:
         row = _default_layout(owner.id)
         db.add(row); db.flush()
+    else:
+        _add_memory_department_if_safe(db, owner, row)
     return row
 
 

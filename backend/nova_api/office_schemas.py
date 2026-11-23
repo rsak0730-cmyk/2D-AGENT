@@ -19,7 +19,7 @@ class OfficeRoom(BaseModel):
 
 class OfficeFurniture(BaseModel):
     id: str = Field(min_length=1, max_length=80)
-    kind: Literal["desk", "chair", "computer", "monitor", "whiteboard", "meeting_table", "server_rack", "coffee_machine", "project_board"]
+    kind: Literal["desk", "chair", "computer", "monitor", "whiteboard", "meeting_table", "server_rack", "coffee_machine", "project_board", "memory_core"]
     x: int = Field(ge=0, le=127)
     y: int = Field(ge=0, le=127)
     width: int = Field(default=1, ge=1, le=16)

@@ -10,13 +10,6 @@ import android.net.Uri
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateOffsetAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -31,10 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -75,112 +65,22 @@ private data class AgentChatSnapshot(val conversationId: String?, val messages: 
 private data class AgentChatReply(val conversationId: String, val response: String, val provider: String, val model: String)
 private data class ProviderConfig(val provider: String, val modelId: String, val configured: Boolean, val keySource: String)
 private data class ProviderTestResult(val modelsAvailable: Int, val modelIds: List<String>)
-private data class WorkforceAgent(val id: String, val identity: String, val name: String, val title: String, val provider: String, val model: String, val instructions: String, val status: String, val specialties: List<String>, val temperature: Double, val contextLength: Int, val permissions: List<String>, val memoryEnabled: Boolean, val priority: Int, val critical: Boolean, val maxDuration: Int)
-private data class WorkforceTask(val id: String, val title: String, val state: String, val result: String?, val error: String?, val priority: Int, val assignedAgentId: String?, val requestedAgentId: String?, val progressPercent: Int, val progressStage: String)
+internal data class WorkforceAgent(val id: String, val identity: String, val name: String, val title: String, val provider: String, val model: String, val instructions: String, val status: String, val specialties: List<String>, val temperature: Double, val contextLength: Int, val permissions: List<String>, val memoryEnabled: Boolean, val priority: Int, val critical: Boolean, val maxDuration: Int)
+internal data class WorkforceTask(val id: String, val title: String, val state: String, val result: String?, val error: String?, val priority: Int, val assignedAgentId: String?, val requestedAgentId: String?, val progressPercent: Int, val progressStage: String)
 private data class AgentAnalytics(val identity: String, val name: String, val status: String, val assignments: Int, val completed: Int, val failed: Int, val active: Int, val durationSeconds: Double?, val durationSamples: Int, val requests: Int, val successful: Int, val failedRequests: Int, val inputTokens: Int, val outputTokens: Int)
-private data class OfficeEvent(val type: String, val agentId: String?, val taskId: String?, val createdAt: String, val payload: String)
-private data class MeetingInviteInfo(val agentId: String,val name: String,val status: String)
-private data class MeetingLine(val speaker: String,val role: String,val content: String)
-private data class MeetingSummary(val id: String,val title: String,val agenda: String,val context: String,val status: String,val scheduledAt: String?,val taskId: String?,val invitations: List<MeetingInviteInfo>,val messages: List<MeetingLine>)
-private data class OfficeCell(val x: Int, val y: Int)
-private data class OfficeRoomInfo(val id: String, val name: String, val x: Int, val y: Int, val width: Int, val height: Int, val entrance: OfficeCell)
-private data class OfficeFurnitureInfo(val id: String, val kind: String, val x: Int, val y: Int, val width: Int, val height: Int, val rotation: Int)
-private data class OfficeCharacterState(val agentId: String, val x: Int, val y: Int, val movementState: String, val destination: OfficeCell?, val route: List<OfficeCell>, val moveId: String?)
-private data class OfficeWorld(val width: Int, val height: Int, val rooms: List<OfficeRoomInfo>, val furniture: List<OfficeFurnitureInfo>, val characters: Map<String, OfficeCharacterState>)
+internal data class OfficeEvent(val type: String, val agentId: String?, val taskId: String?, val createdAt: String, val payload: String)
+internal data class WorkforceMessage(val id: String, val taskId: String?, val senderAgentId: String, val recipientAgentId: String?, val messageType: String, val content: String, val createdAt: String)
+internal data class MeetingInviteInfo(val agentId: String,val name: String,val status: String)
+internal data class MeetingLine(val speaker: String,val role: String,val content: String)
+internal data class MeetingSummary(val id: String,val title: String,val agenda: String,val context: String,val status: String,val scheduledAt: String?,val taskId: String?,val invitations: List<MeetingInviteInfo>,val messages: List<MeetingLine>)
+internal data class OfficeCell(val x: Int, val y: Int)
+internal data class OfficeRoomInfo(val id: String, val name: String, val x: Int, val y: Int, val width: Int, val height: Int, val entrance: OfficeCell)
+internal data class OfficeFurnitureInfo(val id: String, val kind: String, val x: Int, val y: Int, val width: Int, val height: Int, val rotation: Int)
+internal data class OfficeCharacterState(val agentId: String, val x: Int, val y: Int, val movementState: String, val destination: OfficeCell?, val route: List<OfficeCell>, val moveId: String?)
+internal data class OfficeWorld(val width: Int, val height: Int, val rooms: List<OfficeRoomInfo>, val furniture: List<OfficeFurnitureInfo>, val characters: Map<String, OfficeCharacterState>)
 private data class ProviderConnectionInfo(val id: String, val provider: String, val models: List<String>, val priority: Int, val status: String)
 private data class WorkforceSnapshot<A, B, C, D, E>(val first: A, val second: B, val third: C, val fourth: D, val fifth: E)
 private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Workers"), TASKS("Projects & tasks"), MEETINGS("Meetings"), ACTIVITY("Activity"), MEMORY("Memory"), INTEGRATIONS("Integrations"), SETTINGS("Settings") }
-
-@Composable
-private fun PixelOfficeScene(agents: List<WorkforceAgent>, world: OfficeWorld?, modifier: Modifier = Modifier, onAgentSelected: (WorkforceAgent) -> Unit) {
-    val active = agents.count { it.status.equals("working", true) }
-    val moving = world?.characters?.values?.count { it.movementState in listOf("walking", "waiting", "queued") } ?: 0
-    val cycle = rememberInfiniteTransition(label = "work-cycle")
-    val phase by cycle.animateFloat(0f, 1f, infiniteRepeatable(tween(450), repeatMode = RepeatMode.Reverse), label = "typing")
-    Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF18243A))) {
-        if (world == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Waiting for persisted office state from NOVA backend", color = Color.White) }
-        } else BoxWithConstraints(Modifier.fillMaxSize()) {
-            val logicalHeight = 40f + world.height * (360f / world.width)
-            val sceneHeight = maxHeight
-            val tileWidth = 360f / world.width
-            val tileHeight = (logicalHeight - 40f) / world.height
-            val cellWidthDp = maxWidth / world.width.toFloat()
-            val headerDp = sceneHeight * (40f / logicalHeight)
-            val cellHeightDp = (sceneHeight - headerDp) / world.height.toFloat()
-            val density = LocalDensity.current
-            Canvas(Modifier.fillMaxSize()) {
-                val sx = size.width / 360f
-                val sy = size.height / logicalHeight
-                fun pixel(x: Float, y: Float, w: Float, h: Float, color: Color) {
-                    drawRect(color, Offset(x * sx, y * sy), Size(w * sx, h * sy))
-                }
-                pixel(0f, 0f, 360f, logicalHeight, Color(0xFF293B58))
-                pixel(0f, 40f, 360f, logicalHeight - 40f, Color(0xFF526D79))
-                for (row in 0 until world.height) for (column in 0 until world.width) {
-                    pixel(column * tileWidth, 40f + row * tileHeight, tileWidth - 0.25f, tileHeight - 0.25f, if ((row + column) % 2 == 0) Color(0xFF66858A) else Color(0xFF5D7A83))
-                }
-                world.rooms.forEachIndexed { index, room ->
-                    pixel(room.x * tileWidth, 40f + room.y * tileHeight, room.width * tileWidth, room.height * tileHeight, if (index % 2 == 0) Color(0x2251A7B0) else Color(0x223B8B9A))
-                    pixel(room.entrance.x * tileWidth, 40f + room.entrance.y * tileHeight, tileWidth, tileHeight, Color(0xFFD7BD8C))
-                }
-                world.furniture.forEach { item ->
-                    val fw = if (item.rotation == 90 || item.rotation == 270) item.height else item.width
-                    val fh = if (item.rotation == 90 || item.rotation == 270) item.width else item.height
-                    val color = when (item.kind) {
-                        "desk", "meeting_table" -> Color(0xFF795638)
-                        "chair" -> Color(0xFF594331)
-                        "server_rack" -> Color(0xFF334454)
-                        "coffee_machine" -> Color(0xFF8C6B59)
-                        "whiteboard", "project_board", "monitor" -> Color(0xFFD7BD8C)
-                        else -> Color(0xFF6D513E)
-                    }
-                    pixel(item.x * tileWidth, 40f + item.y * tileHeight, fw * tileWidth, fh * tileHeight, color)
-                    if (item.kind == "server_rack") pixel((item.x + 0.2f) * tileWidth, 40f + (item.y + 0.2f) * tileHeight, (fw - 0.4f) * tileWidth, 0.18f * tileHeight, Color(0xFF72D4C2))
-                }
-                pixel(12f, 8f, 58f, 21f, Color(0xFFB8E4E5)); pixel(17f, 12f, 22f, 12f, Color(0xFF739BB1)); pixel(45f, 12f, 20f, 12f, Color(0xFF8CB3C4))
-                pixel(285f, 8f, 58f, 22f, Color(0xFF8C6B59)); pixel(290f, 12f, 48f, 14f, Color(0xFFD7BD8C))
-            }
-            world.characters.values.forEach { character ->
-                val agent = agents.firstOrNull { it.id == character.agentId } ?: return@forEach
-                val spriteWidth = cellWidthDp * 0.92f
-                val spriteHeight = cellHeightDp * 1.22f
-                val target = with(density) {
-                    Offset((cellWidthDp * (character.x + 0.5f) - spriteWidth * 0.5f).toPx(), (headerDp + cellHeightDp * (character.y + 0.5f) - spriteHeight * 0.68f).toPx())
-                }
-                val animated by animateOffsetAsState(target, animationSpec = tween(260), label = "agent-${agent.id}-walk")
-                Box(Modifier.offset { IntOffset(animated.x.roundToInt(), animated.y.roundToInt()) }.size(spriteWidth, spriteHeight).clickable { onAgentSelected(agent) }) {
-                    PixelCharacterSprite(agent, agent.status.equals("working", true), agent.status.equals("error", true) || agent.status.equals("failed", true), phase)
-                }
-            }
-            Column(Modifier.align(Alignment.TopStart).padding(12.dp)) {
-                Text("NOVA OFFICE · ${world.rooms.size} rooms", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                Text("$active working · $moving moving/queued · persisted backend state", color = Color(0xFFD6E5F2), style = MaterialTheme.typography.labelSmall)
-            }
-        }
-    }
-}
-
-@Composable
-private fun PixelCharacterSprite(agent: WorkforceAgent, working: Boolean, failed: Boolean, phase: Float) {
-    val look = officeLook(agent.identity)
-    val shirt = Color(look.shirtArgb)
-    val hair = Color(look.hairArgb)
-    Canvas(Modifier.fillMaxSize()) {
-        fun pixel(x: Float, y: Float, w: Float, h: Float, color: Color) { drawRect(color, Offset(x * size.width, y * size.height), Size(w * size.width, h * size.height)) }
-        val screen = if (failed) Color(0xFFFFB3A8) else if (working) Color(0xFFB5F1A9) else Color(0xFF29475D)
-        pixel(0.08f, 0.68f, 0.84f, 0.12f, Color(0xFF795638))
-        pixel(0.31f, 0.12f, 0.38f, 0.26f, Color(0xFFEDBD91)); pixel(0.29f, 0.08f, 0.42f, 0.12f, hair)
-        pixel(0.3f, 0.23f, 0.08f, 0.12f, hair); pixel(0.64f, 0.23f, 0.08f, 0.12f, hair)
-        pixel(0.4f, 0.25f, 0.04f, 0.04f, Color(0xFF293344)); pixel(0.57f, 0.25f, 0.04f, 0.04f, Color(0xFF293344))
-        pixel(0.28f, 0.39f, 0.46f, 0.28f, shirt)
-        val handShift = if (working && phase > 0.5f) 0.035f else 0f
-        pixel(0.18f, 0.44f + handShift, 0.14f, 0.07f, Color(0xFFEDBD91)); pixel(0.68f, 0.44f - handShift, 0.14f, 0.07f, Color(0xFFEDBD91))
-        pixel(0.34f, 0.66f, 0.14f, 0.16f, Color(0xFF34415A)); pixel(0.53f, 0.66f, 0.14f, 0.16f, Color(0xFF34415A))
-        pixel(0.04f, 0.37f, 0.25f, 0.23f, if (working) Color(0xFF80D58A) else if (failed) Color(0xFFE07B72) else Color(0xFF8DC8D7))
-        pixel(0.08f, 0.41f, 0.18f, 0.15f, screen)
-    }
-}
 
 @Composable
 private fun OfficeStepper(label: String, value: Int, onChange: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -233,6 +133,7 @@ private fun NovaApp(settings: SecureSettings) {
     var section by remember { mutableStateOf(Section.HQ) }
     var base by remember { mutableStateOf(settings.get("base")) }
     var token by remember { mutableStateOf(settings.get("token")) }
+    var reduceMotion by remember { mutableStateOf(settings.get("reduce_motion", "false") == "true") }
     var backendStatus by remember { mutableStateOf(if (settings.get("base").isBlank()) "Backend not configured" else "Checking backend…") }
     var backendBusy by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
@@ -260,6 +161,7 @@ private fun NovaApp(settings: SecureSettings) {
     val workforceAgents = remember { mutableStateListOf<WorkforceAgent>() }
     val workforceTasks = remember { mutableStateListOf<WorkforceTask>() }
     val officeEvents = remember { mutableStateListOf<OfficeEvent>() }
+    val workerMessages = remember { mutableStateListOf<WorkforceMessage>() }
     val meetings = remember { mutableStateListOf<MeetingSummary>() }
     val selectedMeetingParticipants = remember { mutableStateListOf<String>() }
     var meetingTitle by remember { mutableStateOf("") }
@@ -408,6 +310,8 @@ private fun NovaApp(settings: SecureSettings) {
                     workforceAgents.clear(); workforceAgents.addAll(snapshot.first)
                     workforceTasks.clear(); workforceTasks.addAll(snapshot.second)
                     officeEvents.clear(); officeEvents.addAll(snapshot.third)
+                    try { workerMessages.clear(); workerMessages.addAll(withContext(Dispatchers.IO) { loadWorkerMessages(base, token) }) }
+                    catch (_: Exception) { workerMessages.clear() }
                     providerConnections.clear(); providerConnections.addAll(snapshot.fourth)
                     officeWorld = snapshot.fifth
                     try { meetings.clear(); meetings.addAll(withContext(Dispatchers.IO) { loadMeetings(base, token) }) }
@@ -521,7 +425,7 @@ private fun NovaApp(settings: SecureSettings) {
         },
     ) {
       Scaffold(
-        topBar = { TopAppBar(navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, "Open NOVA navigation") } }, title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text(backendStatus, style = MaterialTheme.typography.labelSmall, maxLines = 1) } }, actions = { IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Backend connection") } }) },
+        topBar = { TopAppBar(navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, "Open NOVA navigation") } }, title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text(backendStatus, style = MaterialTheme.typography.labelSmall, maxLines = 1) } }, actions = { IconButton(onClick = { section = Section.ACTIVITY }) { Icon(Icons.Default.Notifications, "Recent activity") }; IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Backend connection") } }) },
         bottomBar = { NavigationBar(containerColor = Color(0xFF0D1421)) { listOf(Section.HQ, Section.AGENTS, Section.TASKS, Section.ACTIVITY, Section.MEMORY).forEach { item -> NavigationBarItem(selected = section == item, onClick = { section = item }, icon = { Icon(when(item){Section.HQ->Icons.Default.Business;Section.AGENTS->Icons.Default.Groups;Section.TASKS->Icons.Default.FolderOpen;Section.ACTIVITY->Icons.Default.History;Section.MEMORY->Icons.Default.Psychology;else->Icons.Default.Home}, item.title) }, label = { Text(item.title) }) } } }
       ) { insets ->
         Box(Modifier.fillMaxSize().padding(insets)) {
@@ -554,16 +458,8 @@ private fun NovaApp(settings: SecureSettings) {
                         TextButton(onClick = refreshWorkforce, enabled = !workforceBusy) { Text(if (workforceBusy) "Syncing" else "Sync") }
                     }
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        PixelOfficeScene(workforceAgents, officeWorld, Modifier.fillMaxSize()) { selectedOfficeAgent = it }
-                        if (officeWorld == null) {
-                            Surface(Modifier.align(Alignment.Center).clickable { showSettings = true }, shape = RoundedCornerShape(18.dp), color = Color(0xE8192536)) {
-                                Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(if (base.isBlank()) "Connect your NOVA backend" else "Headquarters awaiting backend snapshot", style = MaterialTheme.typography.titleMedium)
-                                    Text(if (base.isBlank()) "The office loads persisted rooms and real workers after connection." else workforceNotice, style = MaterialTheme.typography.bodySmall)
-                                    Button(onClick = { showSettings = true }) { Text("Backend connection") }
-                                }
-                            }
-                        }
+                        LivingOfficeScene(workforceAgents, workforceTasks, officeEvents, workerMessages, meetings, officeWorld, reduceMotion, backendStatus, onReduceMotionChange = { reduceMotion = it; settings.put("reduce_motion", it.toString()) }, modifier = Modifier.fillMaxSize(), onAgentSelected = { selectedOfficeAgent = it })
+                        // The environment preview remains visible while offline; its footer clearly marks live data as unavailable.
                     }
                     if (workforceAgents.isNotEmpty()) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(horizontal = 2.dp)) {
@@ -712,7 +608,7 @@ private fun NovaApp(settings: SecureSettings) {
                     SettingsCategory("External integrations", "${providerConnections.size} restricted gateway connection(s). GitHub, IDEs, OAuth integrations, and external actions are not connected by this build.", "Integration manager") { section = Section.INTEGRATIONS }
                     SettingsCategory("Memory & data", "Owner-scoped worker, project, and headquarters memory; conversation and task data stays on the configured backend.", "Manage memory") { section = Section.MEMORY }
                     SettingsCategory("Notifications", "Push notifications are not implemented; NOVA does not claim background notification delivery.")
-                    SettingsCategory("Appearance & animations", "OLED-friendly dark palette is active. The office and assistant orb use lightweight Compose animations; motion controls are not exposed yet.")
+                    Card { Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Appearance & animations", style = MaterialTheme.typography.titleSmall); Text("OLED-friendly palette · ${if (reduceMotion) "reduced motion" else "ambient office animation"}", style = MaterialTheme.typography.bodySmall) }; Switch(checked = reduceMotion, onCheckedChange = { reduceMotion = it; settings.put("reduce_motion", it.toString()) }) } }
                     SettingsCategory("Security & permissions", "Scoped API key stored with Android Keystore. HTTPS only. Upstream provider keys and backend admin credentials stay server-side.")
                     SettingsCategory("Advanced configuration", "$usageSummary\n$analyticsNote")
                 }
@@ -892,7 +788,7 @@ catch (_: Exception) { assistantListening = false; voiceStatus = "Speech recogni
                     if (officeEditorNotice.isNotBlank()) Text(officeEditorNotice, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     Text("Add furniture at a grid cell", style = MaterialTheme.typography.titleSmall)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        items(listOf("desk", "chair", "computer", "monitor", "whiteboard", "meeting_table", "server_rack", "coffee_machine", "project_board")) { kind ->
+                        items(listOf("desk", "chair", "computer", "monitor", "whiteboard", "meeting_table", "server_rack", "coffee_machine", "project_board", "memory_core")) { kind ->
                             FilterChip(selected = officeEditorKind == kind, onClick = { officeEditorKind = kind }, label = { Text(kind) })
                         }
                     }
@@ -930,14 +826,36 @@ catch (_: Exception) { assistantListening = false; voiceStatus = "Speech recogni
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(agent.title, style = MaterialTheme.typography.titleSmall)
                 Text("Identity: ${agent.identity} · ${agent.status}", style = MaterialTheme.typography.bodySmall)
-                Text("Model: ${agent.provider}/${agent.model}", style = MaterialTheme.typography.bodySmall)
-                val currentTask = workforceTasks.firstOrNull { it.assignedAgentId == agent.id && it.state == "RUNNING" }
-                Text("Current task: ${currentTask?.title ?: "No running task in latest snapshot"}", style = MaterialTheme.typography.bodySmall)
+                Text("Personal model identity: ${agent.provider}/${agent.model}", style = MaterialTheme.typography.bodySmall)
+                val modelGateways = providerConnections.filter { agent.model in it.models }
+                Text(if (modelGateways.isEmpty()) "No saved gateway catalog currently lists this exact model ID; the personal model identity remains unchanged." else "Exact model ID appears in these saved gateway catalogs: ${modelGateways.joinToString { it.provider }}. Catalog listing does not prove live inference.", style = MaterialTheme.typography.bodySmall)
+                val currentTask = workforceTasks.firstOrNull { (it.assignedAgentId == agent.id || it.requestedAgentId == agent.id) && it.state in listOf("PLANNING", "ASSIGNED", "RUNNING") }
+                Text("Current activity: ${currentTask?.let { "${it.state.lowercase()} · ${it.title}" } ?: agentActivity(agent.status)}", style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { requestedTaskAgentId = agent.id; selectedOfficeAgent = null; section = Section.TASKS }) { Text("Assign a task to ${agent.name}") }
                 TextButton(onClick = { selectedOfficeAgent = null; section = Section.AGENTS; editingAgent = agent }) { Text("Worker settings & controls") }
                 Text("Specialties: ${agent.specialties.joinToString().ifBlank { "Not configured" }}", style = MaterialTheme.typography.bodySmall)
                 Text("Tools: ${agent.permissions.joinToString().ifBlank { "None enabled" }}", style = MaterialTheme.typography.bodySmall)
                 Text("Saved position: ${officeWorld?.characters?.get(agent.id)?.let { "${it.x}, ${it.y} · ${it.movementState}" } ?: "Unavailable"}", style = MaterialTheme.typography.bodySmall)
+                val agentTaskHistory = workforceTasks.filter { it.assignedAgentId == agent.id || it.requestedAgentId == agent.id }.takeLast(8)
+                Text("Task history · ${agentTaskHistory.size} saved", style = MaterialTheme.typography.labelMedium)
+                agentTaskHistory.forEach { Text("${it.state} · ${it.title}${it.progressStage.takeIf(String::isNotBlank)?.let { stage -> " · $stage ${it.progressPercent}%" } ?: ""}", style = MaterialTheme.typography.bodySmall) }
+                val agentMemories = memories.filter { it.scope == "agent" && it.agentId == agent.id }.takeLast(4)
+                Text("Personal saved memory · ${agentMemories.size} loaded", style = MaterialTheme.typography.labelMedium)
+                agentMemories.forEach { Text("• ${it.content.take(240)}", style = MaterialTheme.typography.bodySmall) }
+                if (agentMemories.isEmpty()) Text("Open Memory to sync or manage this worker's backend-persisted notes.", style = MaterialTheme.typography.bodySmall)
+                val relatedEvents = officeEvents.filter { event -> event.agentId == agent.id || runCatching { JSONObject(event.payload).optString("recipient_agent_id") == agent.id }.getOrDefault(false) }.takeLast(6)
+                Text("Recent recorded communication/activity", style = MaterialTheme.typography.labelMedium)
+                relatedEvents.forEach { Text("${it.type.replace('.', ' ')} · ${it.createdAt}", style = MaterialTheme.typography.bodySmall) }
+                val messageNames = workforceAgents.associate { it.id to it.name }
+                workerMessages.filter { it.senderAgentId == agent.id || it.recipientAgentId == agent.id }.takeLast(8).forEach { message ->
+                    val sender = messageNames[message.senderAgentId] ?: "Worker"
+                    val recipient = message.recipientAgentId?.let { messageNames[it] } ?: "Head Manager"
+                    Text("$sender → $recipient · ${message.messageType}: ${message.content.take(220)}", style = MaterialTheme.typography.bodySmall)
+                }
+                meetings.filter { meeting -> meeting.invitations.any { it.agentId == agent.id } }.takeLast(2).forEach { meeting ->
+                    Text("${meeting.title} · ${meeting.status}", style = MaterialTheme.typography.labelSmall)
+                    meeting.messages.takeLast(2).forEach { line -> Text("${line.speaker}: ${line.content.take(180)}", style = MaterialTheme.typography.bodySmall) }
+                }
                 Text("Send employee to a real room entrance:", style = MaterialTheme.typography.labelMedium)
                 officeWorld?.rooms?.forEach { room ->
                     TextButton(enabled = !workforceBusy, onClick = {
@@ -1209,6 +1127,13 @@ private fun authorizedRequest(base: String, token: String, path: String, method:
         if (!response.isSuccessful) throw IOException("NOVA API returned HTTP ${response.code}: ${body.take(200)}")
         return body
     }
+}
+
+private fun loadWorkerMessages(base: String, token: String): List<WorkforceMessage> {
+    val array = org.json.JSONArray(authorizedRequest(base, token, "/api/v1/agents/messages"))
+    return (0 until array.length()).map { index -> array.getJSONObject(index).let { item ->
+        WorkforceMessage(item.getString("id"), item.optString("task_id").takeIf { it.isNotBlank() && it != "null" }, item.getString("sender_agent_id"), item.optString("recipient_agent_id").takeIf { it.isNotBlank() && it != "null" }, item.optString("message_type", "message"), item.optJSONObject("content")?.toString() ?: "{}", item.optString("created_at"))
+    } }
 }
 
 private fun loadWorkforce(base: String, token: String): WorkforceSnapshot<List<WorkforceAgent>, List<WorkforceTask>, List<OfficeEvent>, List<ProviderConnectionInfo>, OfficeWorld> {

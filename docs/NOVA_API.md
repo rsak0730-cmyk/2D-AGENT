@@ -69,12 +69,12 @@ curl https://nova.example.org/v1/messages \
 
 ## Persisted office state and movement
 
-- `GET /api/v1/office/state` (`agents:read`) creates/returns the owner's default 11-room layout and persistent agent grid positions.
+- `GET /api/v1/office/state` (`agents:read`) creates/returns the owner's default 12-room layout, including the Memory Core department and persistent agent grid positions.
 - `PUT /api/v1/office/layout` (`office:write`) replaces the room/furniture layout after bounds, overlap, footprint, entrance, and saved-position validation. Layout edits are rejected while agents have active movement.
 - `POST /api/v1/office/agents/{agent_id}/move` (`office:write`) calculates and saves an A* route or FIFO queued move; `/step` advances one collision-checked cell and persists it; `/cancel-move` stops at the last saved tile.
 - The SQLAlchemy `create_all` path creates these tables for new local DBs. PostgreSQL deployments must apply migrations through `database/migrations/0009_requested_task_worker.sql`. Existing SQLite DBs are not automatically migrated.
 
-The Android HQ reads this saved state, provides an editor for room geometry/entrances and furniture placement, and advances walking through persisted `/step` requests. `office:write` is required for layout edits and movement; invalid collision/position changes are rejected by the server.
+The Android HQ reads this saved state, provides an editor for room geometry/entrances and furniture placement, and advances walking through persisted `/step` requests. New default layouts include a Memory Core department; a compatible legacy 40×24 default grid receives it additively only when its reserved room/console cells are clear. Custom grids are not overwritten. `office:write` is required for layout edits and movement; invalid collision/position changes are rejected by the server.
 
 ## Live workforce events
 

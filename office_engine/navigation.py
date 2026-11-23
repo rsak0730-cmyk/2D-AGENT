@@ -12,7 +12,7 @@ from typing import Iterable
 
 from .pathfinding import Cell, find_path
 
-SUPPORTED_FURNITURE = {"desk", "chair", "computer", "monitor", "whiteboard", "meeting_table", "server_rack", "coffee_machine", "project_board"}
+SUPPORTED_FURNITURE = {"desk", "chair", "computer", "monitor", "whiteboard", "meeting_table", "server_rack", "coffee_machine", "project_board", "memory_core"}
 
 
 @dataclass(frozen=True)
