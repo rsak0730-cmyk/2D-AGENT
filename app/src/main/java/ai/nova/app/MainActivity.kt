@@ -6,6 +6,11 @@ import android.net.Uri
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -64,6 +69,13 @@ private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assista
 private fun PixelOfficeScene(agents: List<WorkforceAgent>, modifier: Modifier = Modifier) {
     val active = agents.count { it.status == "working" }
     val shownAgents = agents.take(11)
+    val workCycle = rememberInfiniteTransition(label = "office-work-cycle")
+    val workPhase by workCycle.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(650), repeatMode = RepeatMode.Reverse),
+        label = "typing-phase"
+    )
     Card(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF18243A))) {
         Box {
             Canvas(Modifier.fillMaxWidth().height(270.dp)) {
@@ -88,9 +100,10 @@ private fun PixelOfficeScene(agents: List<WorkforceAgent>, modifier: Modifier = 
                     val column = index % 4
                     val row = index / 4
                     val x = 27f + column * 83f
-                    val y = 49f + row * 60f
                     val working = agent.status == "working"
                     val broken = agent.status == "error"
+                    // Only records whose backend status is actually working receive the typing cycle.
+                    val y = 49f + row * 60f - if (working && workPhase > 0.5f) 1.5f else 0f
                     val shirt = shirtColors[index % shirtColors.size]
                     // One seated pixel character per actual backend agent record.
                     pixel(x + 14f, y + 29f, 24f, 4f, Color(0xFF394654))
@@ -99,6 +112,9 @@ private fun PixelOfficeScene(agents: List<WorkforceAgent>, modifier: Modifier = 
                     pixel(x + 17f, y + 10f, 3f, 5f, Color(0xFF483A39))
                     pixel(x + 20f, y + 13f, 2f, 2f, Color(0xFF293344)); pixel(x + 29f, y + 13f, 2f, 2f, Color(0xFF293344))
                     pixel(x + 17f, y + 20f, 18f, 10f, shirt)
+                    val typingOffset = if (working && workPhase > 0.5f) 2f else 0f
+                    pixel(x + 13f, y + 23f + typingOffset, 5f, 3f, Color(0xFFEDBD91))
+                    pixel(x + 34f, y + 23f - typingOffset, 5f, 3f, Color(0xFFEDBD91))
                     pixel(x + 20f, y + 29f, 5f, 5f, Color(0xFF34415A)); pixel(x + 29f, y + 29f, 5f, 5f, Color(0xFF34415A))
                     pixel(x + 6f, y + 25f, 11f, 12f, Color(0xFF704C38))
                     pixel(x + 3f, y + 13f, 18f, 12f, if (working) Color(0xFF80D58A) else if (broken) Color(0xFFE07B72) else Color(0xFF8DC8D7))
@@ -263,6 +279,7 @@ private fun NovaApp(settings: SecureSettings) {
                     Row(verticalAlignment = Alignment.CenterVertically) { Text("Headquarters", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f)); TextButton(onClick = refreshWorkforce) { Text(if (workforceBusy) "Loading…" else "Refresh") } }
                     Text(workforceNotice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     PixelOfficeScene(workforceAgents, Modifier.padding(top = 8.dp))
+                    Text("Only agents whose loaded backend status is working animate at their desks; idle and unavailable states are not simulated.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Completed tasks ${workforceTasks.count { it.state == "COMPLETED" }} · recent saved events", modifier = Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.labelLarge)
                     if (officeEvents.isEmpty()) EmptyState("No recorded activity yet", "The office shows only agents in the loaded backend roster. Event history appears after real task or provider actions.")
                     else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(officeEvents) { event -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(event.type.replace('.', ' ').replace('_', ' '), fontWeight = FontWeight.SemiBold); Text("${event.payload} · ${event.createdAt}", style = MaterialTheme.typography.bodySmall); if (event.taskId != null) Text("Task ${event.taskId.take(8)}", style = MaterialTheme.typography.labelSmall) } } } }
@@ -280,7 +297,7 @@ private fun NovaApp(settings: SecureSettings) {
                     OutlinedTextField(value = newTaskDescription, onValueChange = { newTaskDescription = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Details (optional)") }, maxLines = 2)
                     Button(enabled = newTaskTitle.isNotBlank() && !workforceBusy, onClick = { val title = newTaskTitle.trim(); val description = newTaskDescription.trim(); scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { createWorkforceTask(base, token, title, description) }; newTaskTitle = ""; newTaskDescription = ""; workforceNotice = "Task saved. Tap Run to request real Head Manager planning and worker execution." } catch (e: Exception) { workforceNotice = e.message ?: "Task could not be saved" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Save task") }
                     Text(workforceNotice, style = MaterialTheme.typography.bodySmall)
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(workforceTasks) { task -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Text(task.title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Text(task.state) }; if (!task.result.isNullOrBlank()) Text(task.result, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)); if (!task.error.isNullOrBlank()) Text(task.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (task.state !in listOf("RUNNING", "PLANNING", "COMPLETED", "CANCELLED")) TextButton(onClick = { scope.launch { workforceBusy = true; workforceNotice = "Head Manager planning and workers are calling configured providers…"; try { withContext(Dispatchers.IO) { executeWorkforceTask(base, token, task.id) }; workforceNotice = "Execution finished; output and events are saved by the backend." } catch (e: Exception) { workforceNotice = e.message ?: "Task execution failed. Check saved task status and provider settings." } finally { workforceBusy = false; refreshWorkforce() } } }) { Text(if (task.state == "FAILED") "Retry (bounded)" else "Run with Head Manager") } } } } }
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(workforceTasks) { task -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Text(task.title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Text(task.state) }; if (!task.result.isNullOrBlank()) Text(task.result, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)); if (!task.error.isNullOrBlank()) Text(task.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (task.state in listOf("RUNNING", "PLANNING", "ASSIGNED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { cancelWorkforceTask(base, token, task.id) }; workforceNotice = "Cancellation requested. An in-flight provider call may finish before NOVA stops at the next checkpoint." } catch (e: Exception) { workforceNotice = e.message ?: "Could not request cancellation" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Request cancel") }; if (task.state !in listOf("RUNNING", "PLANNING", "ASSIGNED", "COMPLETED", "CANCELLED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; workforceNotice = "Head Manager planning and workers are calling configured providers…"; try { withContext(Dispatchers.IO) { executeWorkforceTask(base, token, task.id) }; workforceNotice = "Execution finished; output and events are saved by the backend." } catch (e: Exception) { workforceNotice = e.message ?: "Task execution failed. Check saved task status and provider settings." } finally { workforceBusy = false; refreshWorkforce() } } }) { Text(if (task.state == "FAILED") "Retry (bounded)" else "Run with Head Manager") } } } } }
                 }
                 Section.SETTINGS -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(vertical = 20.dp)); Text("Backend URL: ${base.ifBlank { "Not configured" }}"); Text("NOVA token: ${if (token.isBlank()) "Not configured" else "Stored encrypted on this device"}"); Button(onClick = { showSettings = true }) { Text("Configure backend") }; Text("Arena legacy key: ${if (providerConfigured) "Configured" else "Not configured"}"); Button(onClick = openProviderSettings) { Text("Configure Arena key") }; HorizontalDivider(); Text(usageSummary, style = MaterialTheme.typography.bodySmall); Text("Provider router · ${providerConnections.size} saved connection(s)"); providerConnections.forEach { Text("${it.provider} · ${it.status} · ${it.models.size} model IDs", style = MaterialTheme.typography.bodySmall) }; Button(onClick = { providerDialog = true; registryKey = ""; registryStatus = "Add provider credentials over HTTPS; they are encrypted by NOVA on the server." }) { Text("Configure multi-provider router") }; Button(onClick = refreshWorkforce) { Text("Refresh workforce and usage") }; Text("Resource overview shows recorded requests only. Provider-specific limits and costs depend on account/model and are not guessed.", style = MaterialTheme.typography.bodySmall) }
             }
@@ -560,6 +577,10 @@ private fun createWorkforceTask(base: String, token: String, title: String, desc
 
 private fun executeWorkforceTask(base: String, token: String, taskId: String) {
     authorizedRequest(base, token, "/api/v1/tasks/$taskId/execute", "POST")
+}
+
+private fun cancelWorkforceTask(base: String, token: String, taskId: String) {
+    authorizedRequest(base, token, "/api/v1/tasks/$taskId/cancel", "POST")
 }
 
 private fun saveAgentConfig(base: String, token: String, agent: WorkforceAgent, provider: String, model: String, instructions: String, selectedTools: Set<String>): WorkforceAgent {

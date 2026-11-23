@@ -1,6 +1,6 @@
 # NOVA
 
-NOVA is an Android AI workspace with a FastAPI backend. This branch adds the first executable, owner-scoped Head Manager + ten-worker slice without replacing the existing assistant, conversation history, provider-key flow, navigation, or pixel-art plans. The actual repository previously had no pixel-art renderer; Headquarters now shows persisted backend events and does not fake character activity.
+NOVA is an Android AI workspace with a FastAPI backend. This branch adds an executable, owner-scoped Head Manager + ten-worker system while preserving the assistant, conversation history, provider-key flow, and navigation. Headquarters shows the actual persisted workforce and events; subtle typing animation is limited to agents whose backend status is working.
 
 ## Current functionality
 
@@ -8,9 +8,9 @@ NOVA is an Android AI workspace with a FastAPI backend. This branch adds the fir
 - Assistant and conversation history/search/delete using a real provider response; no provider response is fabricated when credentials or service are unavailable.
 - Per-NOVA-token provider registry for Arena, Groq, Gemini, OpenRouter, Cloudflare Workers AI, and an opt-in allow-listed Claude Code Gateway adapter. Provider keys and gateway tokens are Fernet-encrypted on the backend. Exact models are discovered through provider APIs; fallback is finite and records provider/latency/status metadata. Gateway connectivity does not provide upstream credentials or free inference.
 - Per-token seedable workforce of one Head Manager plus ten distinct configured roles. Agents have independent identity, provider/model, prompt, specialties, temperature/context settings, memory toggle, priority/critical markers, duration settings, status, and explicit tool permissions. Workers can optionally call bounded arithmetic, text-count, and own-notes search tools; no shell or arbitrary network tool exists.
-- Headquarters has a pixel-art 2D office scene driven by the persisted roster and actual agent status, alongside persisted activity events. The room is currently static; it does not imply movement, background simulation, or work that did not happen.
+- Headquarters has a pixel-art 2D office scene driven by the persisted roster and actual agent status, alongside persisted activity events. Characters animate subtle typing only while their saved backend status is `working`; there is no walking or background simulation.
 - Assistant replies can be read aloud through Android's configured text-to-speech engine. This is device-engine speech (which may rely on the user's engine/network settings), not generated voice audio or a claim that an agent is speaking live.
-- Owner-scoped tasks and a real API-triggered execution path: model-generated manager plans are parsed and validated; worker assignments/reports and manager synthesis persist. Invalid plans and provider failures remain failed; there is no placeholder success. Tasks run serially in the API request, not via a hidden background service.
+- Owner-scoped tasks and a real API-triggered execution path: model-generated manager plans are parsed and validated; worker assignments/reports and manager synthesis persist. Invalid plans and provider failures remain failed; there is no placeholder success. Tasks run serially in the API request, not via a hidden background service. Owners can cancel queued tasks or request cooperative cancellation between provider calls; an active upstream request is not forcibly interrupted.
 - Agent-to-agent message records, bounded notes for agent/project/headquarters memory, request-budget controls, usage/activity records, authenticated WebSocket events, and admin infrastructure summary.
 - PostgreSQL schema migrations and mock-provider test coverage; the deterministic A* utility remains independent of model calls.
 

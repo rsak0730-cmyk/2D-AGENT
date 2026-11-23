@@ -17,6 +17,14 @@ from .schemas import ActivityView, AgentMessageCreate, AgentMessageView, AgentVi
 router = APIRouter()
 _publisher = None
 
+class TaskCancelled(Exception):
+    """Cooperative cancellation requested by the task owner between provider calls."""
+
+def check_task_cancelled(db: Session, task: Task) -> None:
+    db.refresh(task, attribute_names=["checkpoint"])
+    if (task.checkpoint or {}).get("cancel_requested"):
+        raise TaskCancelled()
+
 def set_publisher(callback):
     global _publisher
     _publisher = callback
@@ -220,11 +228,31 @@ def recent_events(limit:int=Query(default=100,ge=1,le=500),db:Session=Depends(ge
 def infrastructure(db:Session=Depends(get_db),_:None=Depends(require_admin)):
     return {"database":"connected","active_tasks":db.query(Task).filter(Task.state.in_(["RECEIVED","PLANNING","ASSIGNED","RUNNING","PAUSED"])).count(),"queued_assignments":db.query(TaskAssignment).filter(TaskAssignment.status=="QUEUED").count(),"provider_connections":db.query(ProviderConnection).filter(ProviderConnection.enabled.is_(True)).count(),"usage_today":db.query(UsageRecord).filter(UsageRecord.created_at>=datetime.now(timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0)).count(),"worker_mode":"api_triggered_serial_execution","warning":"No separate distributed worker, cross-process lease, or horizontal-safe scheduler is provided."}
 
+@router.post("/api/v1/tasks/{task_id}/cancel",response_model=TaskView)
+def cancel_task(task_id: str, db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("tasks:write"))):
+    task = db.query(Task).filter(Task.id == task_id, Task.owner_key_id == key.id).first()
+    if task is None:
+        raise HTTPException(404, "Task not found")
+    if task.state in {"COMPLETED", "FAILED", "CANCELLED"}:
+        raise HTTPException(409, f"Task in {task.state} state cannot be cancelled")
+    checkpoint = dict(task.checkpoint or {})
+    checkpoint["cancel_requested"] = True
+    task.checkpoint = checkpoint
+    active = task.state in {"PLANNING", "ASSIGNED", "RUNNING"}
+    if not active:
+        task.state = "CANCELLED"
+        task.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    log_event(db, key.id, "task.cancel_requested" if active else "task.cancelled", task.id, payload={"cooperative": active})
+    db.refresh(task)
+    return task
+
 @router.post("/api/v1/tasks/{task_id}/execute",response_model=TaskView)
 async def execute_task(task_id:str,db:Session=Depends(get_db),key:ApiKey=Depends(require_scope("tasks:write"))):
     task=db.query(Task).filter(Task.id==task_id,Task.owner_key_id==key.id).first()
     if task is None: raise HTTPException(404,"Task not found")
     if task.state in {"RUNNING","PLANNING"}: raise HTTPException(409,"Task is already executing")
+    if task.state in {"COMPLETED", "CANCELLED"}: raise HTTPException(409, f"Task in {task.state} state is terminal")
     manager=db.query(Agent).filter(Agent.owner_key_id==key.id,Agent.identity=="manager").first()
     workers=db.query(Agent).filter(Agent.owner_key_id==key.id,Agent.identity!="manager").all()
     if manager is None or not workers: raise HTTPException(409,"Seed the Head Manager and worker roster before execution")
@@ -241,6 +269,7 @@ async def execute_task(task_id:str,db:Session=Depends(get_db),key:ApiKey=Depends
     assignments=[]
     try:
         plan,provider,model=await invoke_agent(db,key,manager,prompt,task.id,"You are NOVA Head Manager. Produce valid JSON and delegate only to listed identities.")
+        check_task_cancelled(db, task)
         try:
             data=json.loads(plan.strip().removeprefix("```json").removesuffix("```").strip()); proposed=data["subtasks"]
         except (ValueError,KeyError,TypeError): raise HTTPException(502,"Head Manager returned an invalid delegation plan")
@@ -258,6 +287,7 @@ async def execute_task(task_id:str,db:Session=Depends(get_db),key:ApiKey=Depends
         task.state="ASSIGNED";db.commit();log_event(db,key.id,"task.assigned",task.id,manager.id,{"count":len(assignments)})
         # A single API process executes serially. Resource limits are persisted; no distributed scheduling is implied.
         for assignment,agent in assignments:
+            check_task_cancelled(db, task)
             task.state="RUNNING";task.assigned_agent_id=agent.id;assignment.status="RUNNING";assignment.started_at=datetime.now(timezone.utc);agent.status="working";db.commit()
             log_event(db,key.id,"agent.started",task.id,agent.id,{"assignment_id":assignment.id,"identity":agent.identity})
             worker_prompt=assignment.instructions+"\n\nDeliver a concise result for: "+assignment.title
@@ -266,15 +296,26 @@ async def execute_task(task_id:str,db:Session=Depends(get_db),key:ApiKey=Depends
                 descriptions={name:TOOL_CATALOG[name] for name in permitted_tools}
                 worker_prompt+="\n\nOptional safe tools explicitly enabled for you: "+json.dumps(descriptions)+". If needed, return JSON only shaped as {\"tool_calls\":[{\"name\":\"exact tool name\",\"arguments\":{}}]} with at most three calls. Otherwise return your plain-text report. Never claim a tool ran unless NOVA returns its result."
             initial,worker_provider,worker_model=await invoke_agent(db,key,agent,worker_prompt,task.id)
+            check_task_cancelled(db, task)
             result,worker_provider,worker_model=await run_worker_tool_requests(db,key,agent,task,worker_prompt,initial,worker_provider,worker_model)
+            check_task_cancelled(db, task)
             assignment.status="COMPLETED";assignment.result=result;assignment.completed_at=datetime.now(timezone.utc);agent.status="idle"
             db.add(AgentMessage(owner_key_id=key.id,task_id=task.id,sender_agent_id=agent.id,recipient_agent_id=manager.id,message_type="worker_result",content={"assignment_id":assignment.id,"provider":worker_provider,"model":worker_model,"result":result}))
             db.commit();log_event(db,key.id,"agent.completed",task.id,agent.id,{"assignment_id":assignment.id})
+        check_task_cancelled(db, task)
         report=[{"agent":a.identity,"title":assignment.title,"result":assignment.result} for assignment,a in assignments]
         final,final_provider,final_model=await invoke_agent(db,key,manager,"Review these actual worker reports. Identify gaps and do not claim checks absent from results.\n"+json.dumps(report),task.id)
+        check_task_cancelled(db, task)
         task.result=final;task.state="COMPLETED";task.completed_at=datetime.now(timezone.utc);manager.status="idle"
         db.add(AgentMessage(owner_key_id=key.id,task_id=task.id,sender_agent_id=manager.id,message_type="final_decision",content={"provider":final_provider,"model":final_model,"result":final}))
         db.commit();log_event(db,key.id,"task.completed",task.id,manager.id,{"assignments":len(assignments)})
+    except TaskCancelled:
+        task.state="CANCELLED";task.error_detail=None;task.completed_at=datetime.now(timezone.utc);manager.status="idle"
+        for assignment,agent in assignments:
+            if assignment.status in {"QUEUED", "RUNNING"}:
+                assignment.status="CANCELLED";assignment.completed_at=datetime.now(timezone.utc)
+            if agent.status == "working": agent.status="idle"
+        db.commit();log_event(db,key.id,"task.cancelled",task.id,manager.id,{"attempt":task.attempt_count})
     except HTTPException as error:
         task.state="FAILED";task.error_detail=error.detail[:1000];task.completed_at=datetime.now(timezone.utc)
         worker_failed=any(assignment.status=="RUNNING" for assignment,_ in assignments)

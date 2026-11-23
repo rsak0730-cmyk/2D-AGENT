@@ -1,11 +1,12 @@
 import asyncio
 import json
+import pytest
 from types import SimpleNamespace
 from fastapi import HTTPException
 from backend.nova_api import credentials, routing
 from backend.nova_api.models import ActivityEvent, Agent, AgentMemory, AgentMessage, ApiKey, ProviderConnection, ResourceSetting, Task, TaskAssignment, UsageRecord
 from backend.nova_api.auth import digest
-from backend.nova_api.workforce import run_worker_tool_requests
+from backend.nova_api.workforce import TaskCancelled, check_task_cancelled, run_worker_tool_requests
 from conftest import TestingSession, auth_key, client
 
 
@@ -200,6 +201,36 @@ def test_manager_plan_failure_is_not_reported_as_success(monkeypatch):
     assert stored.state == "FAILED" and "invalid delegation plan" in stored.error_detail
     assert db.query(TaskAssignment).filter_by(task_id=task["id"]).count() == 0
     db.close()
+
+
+def test_pending_task_can_be_cancelled_and_cannot_be_cancelled_twice():
+    headers = auth_key(["tasks:read", "tasks:write"])
+    created = client.post("/api/v1/tasks", headers=headers, json={"title":"cancel me"})
+    task_id = created.json()["id"]
+    other_owner = auth_key(["tasks:read", "tasks:write"])
+    assert client.post(f"/api/v1/tasks/{task_id}/cancel", headers=other_owner).status_code == 404
+    cancelled = client.post(f"/api/v1/tasks/{task_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200 and cancelled.json()["state"] == "CANCELLED"
+    assert cancelled.json()["checkpoint"]["cancel_requested"] is True
+    assert client.post(f"/api/v1/tasks/{task_id}/cancel", headers=headers).status_code == 409
+    assert client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers).status_code == 409
+
+
+def test_running_task_observes_owner_cancellation_flag_between_provider_calls():
+    headers = auth_key(["tasks:read", "tasks:write"])
+    created = client.post("/api/v1/tasks", headers=headers, json={"title":"cancel during execution"})
+    task_id = created.json()["id"]
+    first = TestingSession(); task = first.get(Task, task_id)
+    second = TestingSession(); persisted = second.get(Task, task_id)
+    task.state = "RUNNING"; first.commit()
+    persisted.checkpoint = {"cancel_requested": True}; second.commit()
+    try:
+        with pytest.raises(TaskCancelled):
+            check_task_cancelled(first, task)
+        response = client.post(f"/api/v1/tasks/{task_id}/cancel", headers=headers)
+        assert response.status_code == 200 and response.json()["state"] == "RUNNING"
+    finally:
+        first.close(); second.close()
 
 
 def test_owner_request_budget_blocks_before_provider_call():
