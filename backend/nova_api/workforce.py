@@ -10,6 +10,7 @@ from .credentials import decrypt_secret, encrypt_secret
 from .db import get_db
 from .models import ActivityEvent, Agent, AgentMemory, AgentMessage, ApiKey, ProviderConnection, ResourceSetting, Task, TaskAssignment, UsageRecord
 from .providers import list_models
+from .safe_tools import TOOL_CATALOG, execute_safe_tool
 from .routing import invoke_owner
 from .schemas import ActivityView, AgentMessageCreate, AgentMessageView, AgentView, MemoryCreate, MemoryView, ProviderConnectionCreate, ProviderConnectionTest, ProviderConnectionView, ResourceSettingsUpdate, TaskView
 
@@ -48,6 +49,43 @@ async def invoke_agent(db, owner, agent, prompt, task_id, system_override=None):
             return await invoke_owner(db,owner,prompt,agent.model_id,system=system,task_id=task_id,agent_id=agent.id,provider_preference=agent.provider,temperature=agent.temperature,context_length=agent.context_length)
     except TimeoutError:
         raise HTTPException(504,f"Agent {agent.identity} exceeded its configured task duration")
+
+async def run_worker_tool_requests(db, owner, agent, task, instructions, initial_result, provider, model):
+    """Run at most three explicitly permitted deterministic tools, then ask for a report."""
+    try:
+        data=json.loads(initial_result.strip().removeprefix("```json").removesuffix("```").strip())
+    except (ValueError, TypeError):
+        return initial_result, provider, model
+    if not isinstance(data, dict) or "tool_calls" not in data:
+        return initial_result, provider, model
+    calls=data.get("tool_calls")
+    if not isinstance(calls,list) or not 1<=len(calls)<=3:
+        raise HTTPException(502,"Worker tool request must contain one to three calls")
+    permitted=set(agent.tool_permissions or []) & set(TOOL_CATALOG)
+    results=[]
+    for call in calls:
+        if not isinstance(call,dict) or not isinstance(call.get("name"),str) or not isinstance(call.get("arguments"),dict):
+            raise HTTPException(502,"Worker tool request has an invalid call structure")
+        name=call["name"]
+        if len(name)>80:
+            raise HTTPException(502,"Worker tool name exceeds the protocol limit")
+        if name not in permitted:
+            log_event(db,owner.id,"tool.denied",task.id,agent.id,{"tool":name})
+            raise HTTPException(403,"Worker requested a tool that is not explicitly permitted for this agent")
+        try:
+            result=execute_safe_tool(name,call["arguments"],db=db,owner_id=owner.id,agent_id=agent.id)
+        except (ValueError,ArithmeticError,TypeError) as error:
+            log_event(db,owner.id,"tool.failed",task.id,agent.id,{"tool":name})
+            raise HTTPException(422,f"Safe tool request was invalid: {str(error)[:160]}")
+        from .models import AgentMessage
+        message=AgentMessage(owner_key_id=owner.id,task_id=task.id,sender_agent_id=agent.id,message_type="tool_result",content={"tool":name,"result":result})
+        db.add(message);db.commit()
+        log_event(db,owner.id,"tool.completed",task.id,agent.id,{"tool":name,"message_id":message.id})
+        results.append({"tool":name,"result":result})
+    followup=("Use only these actual results from NOVA's deterministic local tools. Do not request more tools; "
+              "return a concise worker report and state any limitations.\nOriginal assignment: "+instructions+
+              "\nTool results: "+json.dumps(results,ensure_ascii=False))
+    return await invoke_agent(db,owner,agent,followup,task.id)
 
 @router.post("/api/v1/agents/seed", response_model=list[AgentView])
 def seed_roster(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:write"))):
@@ -222,7 +260,13 @@ async def execute_task(task_id:str,db:Session=Depends(get_db),key:ApiKey=Depends
         for assignment,agent in assignments:
             task.state="RUNNING";task.assigned_agent_id=agent.id;assignment.status="RUNNING";assignment.started_at=datetime.now(timezone.utc);agent.status="working";db.commit()
             log_event(db,key.id,"agent.started",task.id,agent.id,{"assignment_id":assignment.id,"identity":agent.identity})
-            result,worker_provider,worker_model=await invoke_agent(db,key,agent,assignment.instructions+"\n\nDeliver a concise result for: "+assignment.title,task.id)
+            worker_prompt=assignment.instructions+"\n\nDeliver a concise result for: "+assignment.title
+            permitted_tools=sorted(set(agent.tool_permissions or []) & set(TOOL_CATALOG))
+            if permitted_tools:
+                descriptions={name:TOOL_CATALOG[name] for name in permitted_tools}
+                worker_prompt+="\n\nOptional safe tools explicitly enabled for you: "+json.dumps(descriptions)+". If needed, return JSON only shaped as {\"tool_calls\":[{\"name\":\"exact tool name\",\"arguments\":{}}]} with at most three calls. Otherwise return your plain-text report. Never claim a tool ran unless NOVA returns its result."
+            initial,worker_provider,worker_model=await invoke_agent(db,key,agent,worker_prompt,task.id)
+            result,worker_provider,worker_model=await run_worker_tool_requests(db,key,agent,task,worker_prompt,initial,worker_provider,worker_model)
             assignment.status="COMPLETED";assignment.result=result;assignment.completed_at=datetime.now(timezone.utc);agent.status="idle"
             db.add(AgentMessage(owner_key_id=key.id,task_id=task.id,sender_agent_id=agent.id,recipient_agent_id=manager.id,message_type="worker_result",content={"assignment_id":assignment.id,"provider":worker_provider,"model":worker_model,"result":result}))
             db.commit();log_event(db,key.id,"agent.completed",task.id,agent.id,{"assignment_id":assignment.id})

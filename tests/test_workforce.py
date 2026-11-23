@@ -1,9 +1,11 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from fastapi import HTTPException
 from backend.nova_api import credentials, routing
-from backend.nova_api.models import Agent, AgentMemory, AgentMessage, ApiKey, ProviderConnection, ResourceSetting, Task, TaskAssignment, UsageRecord
+from backend.nova_api.models import ActivityEvent, Agent, AgentMemory, AgentMessage, ApiKey, ProviderConnection, ResourceSetting, Task, TaskAssignment, UsageRecord
 from backend.nova_api.auth import digest
+from backend.nova_api.workforce import run_worker_tool_requests
 from conftest import TestingSession, auth_key, client
 
 
@@ -114,6 +116,68 @@ def test_manager_delegates_to_real_workers_and_persists_results(monkeypatch):
     assert {x.message_type for x in messages} == {"delegation_plan", "worker_result", "final_decision"}
     usage = db.query(UsageRecord).filter_by(task_id=task_result.json()["id"], status="success").all()
     assert len(usage) == 4 and sum(x.input_tokens for x in usage) > 0
+    db.close()
+
+
+def test_worker_executes_only_its_explicitly_permitted_safe_tool(monkeypatch):
+    from cryptography.fernet import Fernet
+    encryption_key = Fernet.generate_key().decode()
+    monkeypatch.setattr(credentials, "get_settings", lambda: SimpleNamespace(credential_encryption_key=encryption_key))
+    scopes = ["agents:read", "agents:write", "tasks:read", "tasks:write", "providers:read", "providers:write", "events:read"]
+    owner = auth_key(scopes)
+    client.post("/api/v1/agents/seed", headers=owner)
+    db = TestingSession()
+    for agent in db.query(Agent).all():
+        agent.model_id = "test-live-model"
+        if agent.identity == "qa": agent.tool_permissions = ["math.calculate"]
+    db.commit(); db.close()
+    client.post("/api/v1/providers/connections", headers=owner, json={"provider":"groq", "api_key":"synthetic-provider-secret", "model_ids":["test-live-model"]})
+    task = client.post("/api/v1/tasks", headers=owner, json={"title":"Calculate project estimate"}).json()
+    calls = []
+    async def fake_complete(message, model=None, history=None, api_key=None, base_url=None, provider="arena", system=None, **kwargs):
+        calls.append(message)
+        if "Return JSON only" in message:
+            return json.dumps({"subtasks":[{"agent":"qa", "title":"Calculate estimate", "instructions":"Calculate 6 times 7"}]}), model, 2, 1
+        if "Optional safe tools explicitly enabled" in message:
+            return json.dumps({"tool_calls":[{"name":"math.calculate","arguments":{"expression":"6 * 7"}}]}), model, 3, 1
+        if "Tool results:" in message:
+            assert '"result": 42' in message
+            return "The permitted calculator returned 42.", model, 4, 2
+        if "Review these actual worker reports" in message:
+            return "QA reported the calculator result 42.", model, 5, 2
+        raise AssertionError("Unexpected provider prompt")
+    monkeypatch.setattr(routing, "complete_detailed", fake_complete)
+    result = client.post(f"/api/v1/tasks/{task['id']}/execute", headers=owner)
+    assert result.status_code == 200, result.text
+    assert result.json()["state"] == "COMPLETED"
+    assert result.json()["result"] == "QA reported the calculator result 42."
+    assert len(calls) == 4
+    db = TestingSession()
+    messages = db.query(AgentMessage).filter_by(task_id=task["id"], message_type="tool_result").all()
+    assert len(messages) == 1 and messages[0].content == {"tool":"math.calculate", "result":{"expression":"6 * 7", "result":42}}
+    assert db.query(ActivityEvent).filter_by(task_id=task["id"], event_type="tool.completed").count() == 1
+    db.close()
+
+
+def test_worker_tool_permission_denial_is_audited_and_fails_closed():
+    scopes = ["agents:read", "agents:write", "tasks:read", "tasks:write", "events:read"]
+    headers = auth_key(scopes)
+    client.post("/api/v1/agents/seed", headers=headers)
+    task_body = client.post("/api/v1/tasks", headers=headers, json={"title":"attempt unapproved tool"}).json()
+    db = TestingSession()
+    from backend.nova_api.auth import digest
+    owner = db.query(ApiKey).filter_by(key_hash=digest(headers["Authorization"].split()[1])).first()
+    agent = db.query(Agent).filter_by(owner_key_id=owner.id, identity="qa").first()
+    task = db.get(Task, task_body["id"])
+    try:
+        asyncio.run(run_worker_tool_requests(
+            db, owner, agent, task, "try tool", json.dumps({"tool_calls":[{"name":"math.calculate","arguments":{"expression":"2+2"}}]}), "mock", "model"
+        ))
+        assert False, "a worker without permission must not execute the tool"
+    except HTTPException as error:
+        assert error.status_code == 403
+    assert db.query(ActivityEvent).filter_by(task_id=task.id, event_type="tool.denied").count() == 1
+    assert db.query(AgentMessage).filter_by(task_id=task.id, message_type="tool_result").count() == 0
     db.close()
 
 

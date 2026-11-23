@@ -7,6 +7,8 @@ import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -363,15 +365,24 @@ private fun NovaApp(settings: SecureSettings) {
         var selectedProvider by remember(agent.id) { mutableStateOf(agent.provider) }
         var selectedModel by remember(agent.id) { mutableStateOf(agent.model) }
         var selectedInstructions by remember(agent.id) { mutableStateOf(agent.instructions) }
-        AlertDialog(onDismissRequest = { editingAgent = null }, title = { Text("Configure ${agent.name}") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        var selectedTools by remember(agent.id) { mutableStateOf(agent.permissions.toSet()) }
+        AlertDialog(onDismissRequest = { editingAgent = null }, title = { Text("Configure ${agent.name}") }, text = { Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Identity ${agent.identity} stays independent even when model/provider choices are shared.", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(value = selectedProvider, onValueChange = { selectedProvider = it.trim().lowercase() }, label = { Text("Provider identity") }, singleLine = true)
             OutlinedTextField(value = selectedModel, onValueChange = { selectedModel = it.trim() }, label = { Text("Exact model ID from provider discovery") }, singleLine = true)
             val availableAgentModels = providerConnections.firstOrNull { it.provider == selectedProvider }?.models.orEmpty()
             if (availableAgentModels.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) { items(availableAgentModels.take(30)) { modelId -> TextButton(onClick = { selectedModel = modelId }) { Text(modelId, maxLines = 1) } } }
             OutlinedTextField(value = selectedInstructions, onValueChange = { selectedInstructions = it }, label = { Text("Agent-specific instructions") }, minLines = 3, maxLines = 6)
+            Text("Safe deterministic tools (off by default)", style = MaterialTheme.typography.labelMedium)
+            listOf("math.calculate", "text.analyze", "memory.search").forEach { tool ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = tool in selectedTools, onCheckedChange = { checked -> selectedTools = if (checked) selectedTools + tool else selectedTools - tool })
+                    Text(tool, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Text("These tools cannot run shell commands, access arbitrary URLs, send messages, or modify external systems.", style = MaterialTheme.typography.labelSmall)
             Text("Specialties: ${agent.specialties.joinToString()}", style = MaterialTheme.typography.labelSmall)
-        } }, confirmButton = { TextButton(enabled = selectedProvider.isNotBlank() && selectedModel.isNotBlank() && !workforceBusy, onClick = { workforceBusy = true; scope.launch { try { val updated = withContext(Dispatchers.IO) { saveAgentConfig(base, token, agent, selectedProvider, selectedModel, selectedInstructions) }; workforceAgents.indexOfFirst { it.id == updated.id }.takeIf { it >= 0 }?.let { index -> workforceAgents[index] = updated }; workforceNotice = "Saved ${updated.identity} model and instructions."; editingAgent = null } catch (e: Exception) { workforceNotice = e.message ?: "Could not update agent" } finally { workforceBusy = false } } }) { Text("Save agent") } }, dismissButton = { TextButton(onClick = { editingAgent = null }) { Text("Cancel") } })
+        } }, confirmButton = { TextButton(enabled = selectedProvider.isNotBlank() && selectedModel.isNotBlank() && !workforceBusy, onClick = { workforceBusy = true; scope.launch { try { val updated = withContext(Dispatchers.IO) { saveAgentConfig(base, token, agent, selectedProvider, selectedModel, selectedInstructions, selectedTools) }; workforceAgents.indexOfFirst { it.id == updated.id }.takeIf { it >= 0 }?.let { index -> workforceAgents[index] = updated }; workforceNotice = "Saved ${updated.identity} model and instructions."; editingAgent = null } catch (e: Exception) { workforceNotice = e.message ?: "Could not update agent" } finally { workforceBusy = false } } }) { Text("Save agent") } }, dismissButton = { TextButton(onClick = { editingAgent = null }) { Text("Cancel") } })
     }
     if (showHistory) AlertDialog(onDismissRequest = { showHistory = false }, title = { Text("Conversation history") }, text = {
         Column {
@@ -551,9 +562,9 @@ private fun executeWorkforceTask(base: String, token: String, taskId: String) {
     authorizedRequest(base, token, "/api/v1/tasks/$taskId/execute", "POST")
 }
 
-private fun saveAgentConfig(base: String, token: String, agent: WorkforceAgent, provider: String, model: String, instructions: String): WorkforceAgent {
+private fun saveAgentConfig(base: String, token: String, agent: WorkforceAgent, provider: String, model: String, instructions: String, selectedTools: Set<String>): WorkforceAgent {
     val specialties = org.json.JSONArray().also { list -> agent.specialties.forEach { list.put(it) } }
-    val tools = org.json.JSONArray().also { list -> agent.permissions.forEach { list.put(it) } }
+    val tools = org.json.JSONArray().also { list -> selectedTools.sorted().forEach { list.put(it) } }
     val body = JSONObject().put("identity", agent.identity).put("name", agent.name).put("job_title", agent.title).put("provider", provider).put("model_id", model).put("specialties", specialties).put("instructions", instructions).put("temperature", agent.temperature).put("context_length", agent.contextLength).put("tool_permissions", tools).put("memory_enabled", agent.memoryEnabled).put("priority", agent.priority).put("critical", agent.critical).put("max_task_duration_seconds", agent.maxDuration)
     val item = JSONObject(authorizedRequest(base, token, "/api/v1/agents/${agent.id}", "PUT", body))
     return WorkforceAgent(item.getString("id"), item.getString("identity"), item.getString("name"), item.getString("job_title"), item.getString("provider"), item.getString("model_id"), item.optString("instructions", ""), item.optString("status", "idle"), jsonStrings(item.optJSONArray("specialties")), item.optDouble("temperature", 0.2), item.optInt("context_length", 8192), jsonStrings(item.optJSONArray("tool_permissions")), item.optBoolean("memory_enabled", true), item.optInt("priority", 50), item.optBoolean("critical"), item.optInt("max_task_duration_seconds", 300))
