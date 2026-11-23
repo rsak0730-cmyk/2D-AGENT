@@ -3,8 +3,10 @@ package ai.nova.app
 import android.os.Bundle
 import android.content.Intent
 import android.net.Uri
+import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -32,6 +34,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
@@ -53,10 +56,101 @@ private data class ProviderConnectionInfo(val id: String, val provider: String, 
 private data class WorkforceSnapshot<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Agents"), TASKS("Tasks"), SETTINGS("Settings") }
 
+@Composable
+private fun PixelOfficeScene(agents: List<WorkforceAgent>, modifier: Modifier = Modifier) {
+    val active = agents.count { it.status == "working" }
+    val shownAgents = agents.take(11)
+    Card(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF18243A))) {
+        Box {
+            Canvas(Modifier.fillMaxWidth().height(270.dp)) {
+                val sx = size.width / 360f
+                val sy = size.height / 240f
+                fun pixel(x: Float, y: Float, width: Float, height: Float, color: Color) {
+                    drawRect(color, Offset(x * sx, y * sy), Size(width * sx, height * sy))
+                }
+                pixel(0f, 0f, 360f, 40f, Color(0xFF293B58))
+                pixel(0f, 40f, 360f, 200f, Color(0xFF526D79))
+                for (row in 0..5) for (column in 0..7) {
+                    pixel(column * 48f, 40f + row * 34f, 46f, 32f, if ((row + column) % 2 == 0) Color(0xFF66858A) else Color(0xFF5D7A83))
+                }
+                pixel(0f, 36f, 360f, 5f, Color(0xFF26384C))
+                // Windows, noticeboard, and plants are static room art, not claimed activity.
+                pixel(18f, 9f, 66f, 20f, Color(0xFFB8E4E5)); pixel(22f, 12f, 26f, 14f, Color(0xFF739BB1)); pixel(53f, 12f, 27f, 14f, Color(0xFF8CB3C4))
+                pixel(286f, 8f, 55f, 23f, Color(0xFF8C6B59)); pixel(291f, 12f, 45f, 15f, Color(0xFFD7BD8C))
+                pixel(5f, 165f, 12f, 42f, Color(0xFF76543B)); pixel(0f, 153f, 24f, 20f, Color(0xFF4D8E62)); pixel(3f, 145f, 19f, 14f, Color(0xFF69AA6B))
+                pixel(343f, 175f, 12f, 34f, Color(0xFF76543B)); pixel(337f, 161f, 23f, 20f, Color(0xFF4D8E62)); pixel(340f, 152f, 18f, 14f, Color(0xFF69AA6B))
+                val shirtColors = listOf(Color(0xFF5D82D1), Color(0xFFCC765E), Color(0xFF8E70BE), Color(0xFF4D9C88), Color(0xFFD09B4A), Color(0xFF568FA8))
+                shownAgents.forEachIndexed { index, agent ->
+                    val column = index % 4
+                    val row = index / 4
+                    val x = 27f + column * 83f
+                    val y = 49f + row * 60f
+                    val working = agent.status == "working"
+                    val broken = agent.status == "error"
+                    val shirt = shirtColors[index % shirtColors.size]
+                    // One seated pixel character per actual backend agent record.
+                    pixel(x + 14f, y + 29f, 24f, 4f, Color(0xFF394654))
+                    pixel(x + 18f, y + 8f, 15f, 13f, Color(0xFFEDBD91))
+                    pixel(x + 17f, y + 5f, 17f, 6f, Color(0xFF483A39))
+                    pixel(x + 17f, y + 10f, 3f, 5f, Color(0xFF483A39))
+                    pixel(x + 20f, y + 13f, 2f, 2f, Color(0xFF293344)); pixel(x + 29f, y + 13f, 2f, 2f, Color(0xFF293344))
+                    pixel(x + 17f, y + 20f, 18f, 10f, shirt)
+                    pixel(x + 20f, y + 29f, 5f, 5f, Color(0xFF34415A)); pixel(x + 29f, y + 29f, 5f, 5f, Color(0xFF34415A))
+                    pixel(x + 6f, y + 25f, 11f, 12f, Color(0xFF704C38))
+                    pixel(x + 3f, y + 13f, 18f, 12f, if (working) Color(0xFF80D58A) else if (broken) Color(0xFFE07B72) else Color(0xFF8DC8D7))
+                    pixel(x + 5f, y + 15f, 14f, 8f, if (working) Color(0xFFB5F1A9) else if (broken) Color(0xFFFFB3A8) else Color(0xFF29475D))
+                    pixel(x + 0f, y + 37f, 48f, 4f, Color(0xFF795638))
+                    pixel(x + 2f, y + 41f, 4f, 10f, Color(0xFF594331)); pixel(x + 42f, y + 41f, 4f, 10f, Color(0xFF594331))
+                    pixel(x + 6f, y + 36f, 9f, 2f, if (working) Color(0xFF8BE292) else if (broken) Color(0xFFEF8A7E) else Color(0xFF8598A9))
+                }
+            }
+            Column(Modifier.align(Alignment.TopStart).padding(12.dp)) {
+                Text("NOVA OFFICE", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                Text("${shownAgents.size}/${agents.size} rostered shown · $active working (live backend status)", color = Color(0xFFD6E5F2), style = MaterialTheme.typography.labelSmall)
+            }
+            if (agents.isEmpty()) Text("No roster loaded · seed the workforce to populate desks", color = Color.White, style = MaterialTheme.typography.bodySmall, modifier = Modifier.align(Alignment.Center).padding(24.dp))
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NovaApp(settings: SecureSettings) {
     val context = LocalContext.current
+    var speechEngine by remember { mutableStateOf<TextToSpeech?>(null) }
+    var speechInitializing by remember { mutableStateOf(false) }
+    var pendingSpeech by remember { mutableStateOf<String?>(null) }
+    var voiceStatus by remember { mutableStateOf("") }
+    DisposableEffect(context) { onDispose { speechEngine?.stop(); speechEngine?.shutdown() } }
+    val speakResponse: (String) -> Unit = { text ->
+        if (speechEngine != null && !speechInitializing) {
+            speechEngine?.stop()
+            speechEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nova-assistant-response")
+            voiceStatus = "Speaking with the device's configured speech engine."
+        } else if (!speechInitializing) {
+            pendingSpeech = text
+            speechInitializing = true
+            speechEngine = TextToSpeech(context) { result ->
+                speechInitializing = false
+                if (result == TextToSpeech.SUCCESS) {
+                    val languageResult = speechEngine?.setLanguage(Locale.getDefault())
+                    if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        voiceStatus = "The device speech engine does not support the current language."
+                        pendingSpeech = null
+                    } else {
+                        pendingSpeech?.let { speechEngine?.speak(it, TextToSpeech.QUEUE_FLUSH, null, "nova-assistant-response") }
+                        pendingSpeech = null
+                        voiceStatus = "Speaking with the device's configured speech engine."
+                    }
+                } else {
+                    pendingSpeech = null
+                    voiceStatus = "Device text-to-speech could not initialize."
+                }
+            }
+        } else {
+            pendingSpeech = text
+        }
+    }
     var section by remember { mutableStateOf(Section.ASSISTANT) }
     var base by remember { mutableStateOf(settings.get("base")) }
     var token by remember { mutableStateOf(settings.get("token")) }
@@ -139,13 +233,13 @@ private fun NovaApp(settings: SecureSettings) {
                 Section.ASSISTANT -> {
                     Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) { Text("Your assistant", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text(status, style = MaterialTheme.typography.bodySmall) }
+                            Column(Modifier.weight(1f)) { Text("Your assistant", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text(status, style = MaterialTheme.typography.bodySmall); if (voiceStatus.isNotBlank()) Text(voiceStatus, style = MaterialTheme.typography.labelSmall) }
                             TextButton(onClick = openProviderSettings) { Text("AI provider") }
                         }
                     }
                     LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (chat.isEmpty()) item { EmptyState("Ready when you are", "Connect your own NOVA backend and provider. NOVA won't invent an answer if it is offline.") }
-                        items(chat) { line -> ChatBubble(line) }
+                        items(chat) { line -> ChatBubble(line, speakResponse) }
                         if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                     }
                     Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -164,9 +258,9 @@ private fun NovaApp(settings: SecureSettings) {
                 Section.HQ -> Column(Modifier.fillMaxSize().padding(top = 16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) { Text("Headquarters", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f)); TextButton(onClick = refreshWorkforce) { Text(if (workforceBusy) "Loading…" else "Refresh") } }
                     Text(workforceNotice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(usageSummary, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 4.dp))
-                    Text("Real backend activity · ${workforceAgents.count { it.status == "working" }} / ${workforceAgents.size} agents active · ${workforceTasks.count { it.state == "COMPLETED" }} completed", modifier = Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.labelLarge)
-                    if (officeEvents.isEmpty()) EmptyState("No recorded activity", "Headquarters only reflects persisted task and agent events. No movement or work is simulated.")
+                    PixelOfficeScene(workforceAgents, Modifier.padding(top = 8.dp))
+                    Text("Completed tasks ${workforceTasks.count { it.state == "COMPLETED" }} · recent saved events", modifier = Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.labelLarge)
+                    if (officeEvents.isEmpty()) EmptyState("No recorded activity yet", "The office shows only agents in the loaded backend roster. Event history appears after real task or provider actions.")
                     else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(officeEvents) { event -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(event.type.replace('.', ' ').replace('_', ' '), fontWeight = FontWeight.SemiBold); Text("${event.payload} · ${event.createdAt}", style = MaterialTheme.typography.bodySmall); if (event.taskId != null) Text("Task ${event.taskId.take(8)}", style = MaterialTheme.typography.labelSmall) } } } }
                 }
                 Section.AGENTS -> Column(Modifier.fillMaxSize().padding(top = 16.dp)) {
@@ -323,9 +417,16 @@ private fun NovaApp(settings: SecureSettings) {
     )
 }
 
-@Composable private fun ChatBubble(line: ChatLine) {
+@Composable private fun ChatBubble(line: ChatLine, onSpeak: (String) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (line.fromUser) Arrangement.End else Arrangement.Start) {
-        Surface(color = if (line.fromUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(18.dp), modifier = Modifier.widthIn(max = 320.dp)) { Text(line.text, Modifier.padding(14.dp)) }
+        Surface(color = if (line.fromUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(18.dp), modifier = Modifier.widthIn(max = 320.dp)) {
+            Column(Modifier.padding(12.dp)) {
+                Text(line.text)
+                if (!line.fromUser) TextButton(onClick = { onSpeak(line.text) }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                    Icon(Icons.Default.VolumeUp, "Read response aloud", modifier = Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Speak")
+                }
+            }
+        }
     }
 }
 @Composable private fun EmptyState(title: String, message: String) { Column(Modifier.fillMaxWidth().padding(top = 36.dp), horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.AutoAwesome, title, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(42.dp)); Spacer(Modifier.height(10.dp)); Text(title, style = MaterialTheme.typography.titleMedium); Text(message, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
