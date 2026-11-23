@@ -119,6 +119,7 @@ internal fun LivingOfficeScene(
             val floorTopPx = viewportHeightPx * 0.31f
             val floorLeftDp = with(density) { floorLeftPx.toDp() }
             val floorTopDp = with(density) { floorTopPx.toDp() }
+            val communicationAgents = remember(events.toList(), messages.toList()) { freshCommunicators(events, messages) }
 
             Box(
                 Modifier.fillMaxSize().pointerInput(Unit) {
@@ -157,7 +158,6 @@ internal fun LivingOfficeScene(
                                 ) { focusedRoomId = room.id },
                         )
                     }
-                    val communicationAgents = remember(events.toList(), messages.toList()) { freshCommunicators(events, messages) }
                     val meetingAgents = meetings.filter { it.status.equals("running", true) }
                         .flatMap { meeting -> meeting.invitations.filter { it.status != "declined" }.map { it.agentId } }.toSet()
                     world.characters.values.forEach { character ->
