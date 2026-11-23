@@ -107,7 +107,7 @@ internal fun LivingOfficeScene(
 
     var camera by remember { mutableStateOf(OfficeCamera()) }
     var focusedRoomId by remember { mutableStateOf<String?>(null) }
-    val cameraSnapshot by rememberUpdatedState(camera)
+    val cameraSnapshot = rememberUpdatedState(camera)
 
     Card(modifier, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF070D19))) {
         BoxWithConstraints(Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp))) {
