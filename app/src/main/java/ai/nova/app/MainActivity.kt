@@ -370,14 +370,6 @@ private fun NovaApp(settings: SecureSettings) {
             catch (error: Exception) { memoryStatus = error.message ?: "Memory was not saved" }
         }
     }
-    val testBackendConnection: () -> Unit = {
-        backendBusy = true; backendStatus = "Checking HTTPS backend and token…"
-        scope.launch {
-            try { backendStatus = withContext(Dispatchers.IO) { checkBackendConnection(base, token) }; if (token.isNotBlank()) refreshWorkforce() }
-            catch (error: Exception) { backendStatus = error.message ?: "Backend connection failed; retrying automatically" }
-            finally { backendBusy = false }
-        }
-    }
     LaunchedEffect(base, token, showSettings) {
         if (showSettings) return@LaunchedEffect
         if (base.isBlank()) { backendStatus = "Backend not configured"; return@LaunchedEffect }
@@ -429,6 +421,14 @@ private fun NovaApp(settings: SecureSettings) {
                 } catch (e: Exception) { workforceNotice = e.message ?: "Could not load workforce data" }
                 finally { workforceBusy = false }
             }
+        }
+    }
+    val testBackendConnection: () -> Unit = {
+        backendBusy = true; backendStatus = "Checking HTTPS backend and token…"
+        scope.launch {
+            try { backendStatus = withContext(Dispatchers.IO) { checkBackendConnection(base, token) }; if (token.isNotBlank()) refreshWorkforce() }
+            catch (error: Exception) { backendStatus = error.message ?: "Backend connection failed; retrying automatically" }
+            finally { backendBusy = false }
         }
     }
     LaunchedEffect(section, base, token) {
