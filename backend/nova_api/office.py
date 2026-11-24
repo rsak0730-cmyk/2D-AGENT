@@ -18,6 +18,16 @@ ROOM_NAMES = [
     ("server-room", "Server Room"), ("reception", "Reception"), ("break-room", "Break Room"), ("memory-core", "Memory Core"),
 ]
 ROLE_ROOM = {"manager":"head-office", "android":"development", "web":"development", "game":"development", "backend":"development", "ui-ux":"design", "research":"research", "database":"memory-core", "security":"server-room", "qa":"testing", "documentation":"writing"}
+ROLE_WORKSTATION_OFFSET = {"manager":(3,2), "android":(1,1), "web":(6,1), "game":(1,3), "backend":(6,3), "ui-ux":(3,2), "research":(3,2), "database":(1,3), "security":(5,2), "qa":(3,2), "documentation":(3,2)}
+
+
+def _workstations(rooms: list[dict]) -> list[dict]:
+    by_id = {room["id"]: room for room in rooms}
+    return [
+        {"id":f"workstation-{identity}", "kind":"personal_workstation", "x":by_id[room_id]["x"]+dx, "y":by_id[room_id]["y"]+dy, "width":3, "height":1, "rotation":0}
+        for identity, room_id in ROLE_ROOM.items() if room_id in by_id
+        for dx, dy in [ROLE_WORKSTATION_OFFSET[identity]]
+    ]
 
 
 def _default_layout(owner_id: str) -> OfficeLayout:
@@ -35,8 +45,9 @@ def _default_layout(owner_id: str) -> OfficeLayout:
             furniture.append({"id":"coffee-machine", "kind":"coffee_machine", "x":x+2, "y":y+1, "width":1, "height":1, "rotation":0})
         elif room_id == "memory-core":
             furniture.append({"id":"memory-core-console", "kind":"memory_core", "x":x+4, "y":y+1, "width":2, "height":2, "rotation":0})
-        else:
+        elif room_id not in ROLE_ROOM.values():
             furniture.append({"id":f"{room_id}-desk", "kind":"desk", "x":x+2, "y":y+1, "width":2, "height":1, "rotation":0})
+    furniture.extend(_workstations(rooms))
     return OfficeLayout(owner_key_id=owner_id, width=40, height=24, rooms=rooms, furniture=furniture)
 
 
@@ -85,6 +96,38 @@ def _add_memory_department_if_safe(db: Session, owner: ApiKey, layout: OfficeLay
     db.flush()
 
 
+def _add_default_workstations_if_safe(layout: OfficeLayout) -> None:
+    """Upgrade only the untouched stock layout; never overwrite customized furniture."""
+    if any(item.get("kind") == "personal_workstation" for item in layout.furniture or []):
+        return
+    rooms_by_id = {room.get("id"): room for room in layout.rooms or []}
+    if set(rooms_by_id) != {room_id for room_id, _ in ROOM_NAMES}:
+        return
+    for index, (room_id, expected_name) in enumerate(ROOM_NAMES):
+        room = rooms_by_id[room_id]
+        if (room.get("name"), room.get("x"), room.get("y"), room.get("width"), room.get("height")) != (expected_name, (index % 4) * 10, (index // 4) * 8, 10, 6):
+            return
+    expected = []
+    for room_id, _ in ROOM_NAMES:
+        room = rooms_by_id[room_id]; x, y = room["x"], room["y"]
+        if room_id == "meeting": expected.append({"id":"meeting-table", "kind":"meeting_table", "x":x+3, "y":y+2, "width":3, "height":2, "rotation":0})
+        elif room_id == "server-room": expected.append({"id":"server-rack", "kind":"server_rack", "x":x+2, "y":y+1, "width":2, "height":1, "rotation":0})
+        elif room_id == "break-room": expected.append({"id":"coffee-machine", "kind":"coffee_machine", "x":x+2, "y":y+1, "width":1, "height":1, "rotation":0})
+        elif room_id == "memory-core": expected.append({"id":"memory-core-console", "kind":"memory_core", "x":x+4, "y":y+1, "width":2, "height":2, "rotation":0})
+        elif room_id not in ROLE_ROOM.values(): expected.append({"id":f"{room_id}-desk", "kind":"desk", "x":x+2, "y":y+1, "width":2, "height":1, "rotation":0})
+    def fingerprint(item):
+        return (item.get("id"), item.get("kind"), item.get("x"), item.get("y"), item.get("width", 1), item.get("height", 1), item.get("rotation", 0))
+    if {fingerprint(item) for item in layout.furniture or []} != {fingerprint(item) for item in expected}:
+        return
+    replacement = [item for item in expected if item["kind"] != "desk"] + _workstations(layout.rooms)
+    entrances = [(room["entrance"]["x"], room["entrance"]["y"]) for room in layout.rooms]
+    try:
+        validate_furniture_layout(layout.width, layout.height, _furniture(replacement), entrances)
+    except ValueError:
+        return
+    layout.furniture = replacement
+
+
 def _layout(db: Session, owner: ApiKey) -> OfficeLayout:
     row = db.query(OfficeLayout).filter(OfficeLayout.owner_key_id == owner.id).first()
     if row is None:
@@ -92,6 +135,7 @@ def _layout(db: Session, owner: ApiKey) -> OfficeLayout:
         db.add(row); db.flush()
     else:
         _add_memory_department_if_safe(db, owner, row)
+        _add_default_workstations_if_safe(row)
     return row
 
 
@@ -105,7 +149,9 @@ def _positions(db: Session, owner: ApiKey, layout: OfficeLayout, blocked: set[tu
         if agent.id in by_agent:
             continue
         home = room_by_id.get(ROLE_ROOM.get(agent.identity, "development"), layout.rooms[0])
-        candidates = [(x,y) for y in range(home["y"]+1, home["y"]+home["height"]-1) for x in range(home["x"]+1, home["x"]+home["width"]-1)]
+        station = next((item for item in layout.furniture or [] if item.get("id") == f"workstation-{agent.identity}"), None)
+        candidates = ([(station["x"] + 1, station["y"] + 1)] if station else [])
+        candidates += [(x,y) for y in range(home["y"]+1, home["y"]+home["height"]-1) for x in range(home["x"]+1, home["x"]+home["width"]-1)]
         candidates += [(x,y) for y in range(layout.height) for x in range(layout.width)]
         point = next((cell for cell in candidates if cell not in blocked and cell not in occupied), None)
         if point is None:
@@ -170,7 +216,7 @@ def schedule_agent_workstation(db: Session, owner: ApiKey, agent_id: str, task_i
     blocked = validate_furniture_layout(layout.width, layout.height, _furniture(layout.furniture), [(r["entrance"]["x"], r["entrance"]["y"]) for r in layout.rooms])
     positions = _positions(db, owner, layout, blocked)
     occupied = {(position.x, position.y) for position in positions if position.agent_id != agent.id}
-    desks = [item for item in layout.furniture if item["kind"] == "desk" and room["x"] <= item["x"] < room["x"] + room["width"] and room["y"] <= item["y"] < room["y"] + room["height"]]
+    desks = [item for item in layout.furniture if (item.get("id") == f"workstation-{agent.identity}" or (item["kind"] == "desk" and room["x"] <= item["x"] < room["x"] + room["width"] and room["y"] <= item["y"] < room["y"] + room["height"]))]
     furniture_cells = {(cell[0], cell[1]) for item in desks for cell in Furniture(item["id"], item["kind"], item["x"], item["y"], item.get("width", 1), item.get("height", 1), item.get("rotation", 0)).cells}
     candidates = [(x, y) for y in range(room["y"], room["y"] + room["height"]) for x in range(room["x"], room["x"] + room["width"]) if (x, y) not in blocked and (x, y) not in occupied]
     if not candidates:

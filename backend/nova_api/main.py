@@ -24,6 +24,7 @@ from .workforce import router as workforce_router, set_publisher
 from .office import router as office_router
 from .compat import router as compatibility_router
 from .collaboration import router as collaboration_router
+from .characters import router as characters_router, head_system_context
 from .event_bus import PostgresEventBus
 
 TASK_STATES = {"RECEIVED", "ANALYZING", "PLANNING", "RECRUITING", "ASSIGNED", "RUNNING", "WAITING_FOR_TOOL", "WAITING_FOR_API", "WAITING_FOR_APPROVAL", "PAUSED", "FAILED", "TESTING", "COMPLETED", "CANCELLED"}
@@ -278,7 +279,8 @@ async def chat(body: ChatRequest, db: Session = Depends(get_db), key: ApiKey = D
     db.add(ConversationMessage(conversation_id=conversation.id, role="user", content=body.message, status="complete"))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
-    text, provider_name, model = await invoke_owner(db, key, body.message, body.model, history)
+    head_system = head_system_context(db, key.id)
+    text, provider_name, model = await invoke_owner(db, key, body.message, body.model, history, system=head_system)
     db.add(ConversationMessage(conversation_id=conversation.id, role="assistant", content=text, model=model, status="complete"))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -296,13 +298,14 @@ async def chat_stream(body: ChatRequest, db: Session = Depends(get_db), key: Api
         db.add(conversation); db.commit(); db.refresh(conversation)
     previous = (db.query(ConversationMessage).filter(ConversationMessage.conversation_id == conversation.id, ConversationMessage.status == "complete").order_by(ConversationMessage.created_at.desc()).limit(20).all())
     history = [{"role": item.role, "content": item.content} for item in reversed(previous) if item.role in {"user", "assistant"}]
-    if sum(len(item["content"]) for item in history) + len(body.message) > get_settings().max_prompt_characters:
+    head_system = head_system_context(db, key.id)
+    if sum(len(item["content"]) for item in history) + len(body.message) + len(head_system) > get_settings().max_prompt_characters:
         raise HTTPException(413, "Request exceeds the configured prompt-size limit")
     db.add(ConversationMessage(conversation_id=conversation.id, role="user", content=body.message, status="complete"))
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
     model_id = body.model or get_settings().model
-    messages = history + [{"role":"user", "content":body.message}]
+    messages = [{"role":"system", "content":head_system}] + history + [{"role":"user", "content":body.message}]
     upstream, provider_name, fallback = await open_owner_stream(db, key, model_id, messages, 0.2, get_settings().max_completion_tokens)
     conversation_id = conversation.id
     owner_id = key.id
@@ -443,3 +446,4 @@ app.include_router(workforce_router)
 app.include_router(office_router)
 app.include_router(compatibility_router)
 app.include_router(collaboration_router)
+app.include_router(characters_router)

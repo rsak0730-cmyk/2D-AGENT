@@ -1,6 +1,7 @@
 package ai.nova.app
 
 import kotlin.math.floor
+import org.json.JSONObject
 
 /** Stable, role-based visual identity for the native pixel-art renderer. */
 internal data class OfficeLook(
@@ -8,8 +9,13 @@ internal data class OfficeLook(
     val hairArgb: Int,
     val skinArgb: Int,
     val accentArgb: Int,
+    val eyeArgb: Int,
     val hairStyle: Int,
+    val faceShape: Int,
+    val bodyType: Int,
+    val outfitStyle: Int,
     val accessory: Int,
+    val accessoryName: String,
 )
 
 internal enum class WorkerPose { IDLE, WALKING, TYPING, THINKING, TALKING, MEETING, RESTING, ALERT }
@@ -45,20 +51,31 @@ private val accents = intArrayOf(
     0xFFFC9B7D.toInt(), 0xFFA6F1D0.toInt(), 0xFFDBA9FF.toInt(),
 )
 
-internal fun officeLook(identity: String): OfficeLook {
+internal fun officeLook(identity: String, appearanceJson: String? = null): OfficeLook {
     val role = identity.lowercase()
     val hash = role.hashCode()
     val fallback = listOf(0xFF5D82D1, 0xFFCC765E, 0xFF8E70BE, 0xFF4D9C88, 0xFFD09B4A, 0xFF568FA8)
     val shirt = roleShirts[role] ?: fallback[Math.floorMod(hash, fallback.size)].toInt()
     val hair = if (Math.floorMod(hash, 2) == 0) 0xFF483A39.toInt() else 0xFF332F40.toInt()
     val skinSet = intArrayOf(0xFFF0C49A.toInt(), 0xFFE1A879.toInt(), 0xFFBC805D.toInt(), 0xFF8F5D49.toInt())
-    return OfficeLook(
-        shirtArgb = shirt,
-        hairArgb = hair,
-        skinArgb = skinSet[Math.floorMod(hash / 3, skinSet.size)],
-        accentArgb = accents[Math.floorMod(hash, accents.size)],
-        hairStyle = Math.floorMod(hash / 7, 4),
-        accessory = Math.floorMod(hash / 11, 4),
+    val base = OfficeLook(shirt, hair, skinSet[Math.floorMod(hash / 3, skinSet.size)], accents[Math.floorMod(hash, accents.size)], 0xFF392920.toInt(), Math.floorMod(hash / 7, 8), Math.floorMod(hash / 13, 6), Math.floorMod(hash / 17, 6), Math.floorMod(hash / 19, 5), Math.floorMod(hash / 11, 6), "personal accessory")
+    val json = runCatching { appearanceJson?.let(::JSONObject) }.getOrNull() ?: return base
+    fun color(name: String, default: Int): Int = runCatching {
+        val value = json.optString(name).removePrefix("#")
+        val rgb = value.toLong(16).toInt() and 0x00FFFFFF
+        (0xFF shl 24) or rgb
+    }.getOrDefault(default)
+    fun index(name: String, values: List<String>, default: Int): Int = values.indexOf(json.optString(name)).takeIf { it >= 0 } ?: default
+    val hairStyles = listOf("short_curls", "side_swept", "long_waves", "close_cropped", "undercut", "long_braid", "shoulder_length", "neat_swept", "loose_curls", "soft_waves")
+    return base.copy(
+        shirtArgb = color("clothing_color", base.shirtArgb), hairArgb = color("hair_color", base.hairArgb),
+        skinArgb = color("skin_color", base.skinArgb), accentArgb = color("accent_color", base.accentArgb), eyeArgb = color("eye_color", base.eyeArgb),
+        hairStyle = index("hair_style", hairStyles, base.hairStyle),
+        faceShape = index("face_shape", listOf("oval", "square", "round", "heart", "long", "diamond"), base.faceShape),
+        bodyType = index("body_type", listOf("average", "tall", "compact", "broad", "athletic", "slim"), base.bodyType),
+        outfitStyle = Math.floorMod(json.optString("clothing").hashCode(), 5),
+        accessory = Math.floorMod(json.optString("accessory").hashCode(), 6),
+        accessoryName = json.optString("accessory", "personal accessory"),
     )
 }
 
@@ -74,6 +91,26 @@ internal fun assignedTaskFor(agent: WorkforceAgent, tasks: List<WorkforceTask>):
         ?: if (agent.identity == "manager") tasks.firstOrNull { it.state == "PLANNING" } else null
 
 private val ACTIVE_TASK_STATES = setOf("PLANNING", "ASSIGNED", "RUNNING")
+
+@Suppress("UNUSED_PARAMETER")
+internal fun verifiedModelIdentity(agent: WorkforceAgent, catalogs: List<ProviderConnectionInfo>): String? {
+    // The app currently has no gateway attestation/provenance endpoint. A configured
+    // model string or provider catalog entry is not proof of the model serving a request.
+    return null
+}
+
+internal fun modelConnectionStatus(agent: WorkforceAgent, task: WorkforceTask?, catalogs: List<ProviderConnectionInfo>): String {
+    val matches = catalogs.filter { it.provider.equals(agent.provider, ignoreCase = true) && agent.model in it.models }
+    return when {
+        task?.state == "RUNNING" || agent.status.equals("working", true) -> "Working"
+        task?.state in setOf("PLANNING", "ASSIGNED") -> "Thinking"
+        agent.status.equals("paused", true) -> "Idle"
+        agent.status in setOf("error", "offline", "disabled") -> "Unavailable"
+        matches.any { it.status.equals("error", true) } -> "Reconnecting"
+        matches.any { it.status.equals("connected", true) } -> "Connected"
+        else -> "Connection unknown"
+    }
+}
 
 internal fun workerPose(
     agent: WorkforceAgent,

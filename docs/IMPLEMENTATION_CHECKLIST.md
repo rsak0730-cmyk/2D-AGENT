@@ -77,3 +77,16 @@ This checklist is based on the unfinished items from the prior implementation re
 - [x] Added Memory Core room/furniture to new default office worlds, safe additive upgrade for compatible legacy default grids, and accepted its furniture type through backend validation/editor. API/navigation tests cover default world, compatibility upgrade, and movement/layout regression.
 - [x] Backend checks after this increment: `89 passed, 1 skipped, 1 warning`; `compileall` and `git diff --check` pass.
 - [x] Android Actions run 45205476348 passed on `c7c265586a6d58754aa3b05f287ecdd85e6b736a`: Kotlin/Compose compile, unit tests, lint, debug APK assembly/verification, and artifact upload. Backend validation run 45205476276 also passed on this SHA. Local JDK/SDK is absent; device frame-time, battery, touch instrumentation, and live backend/provider/deployment acceptance tests remain unrun. Custom layouts with occupied Memory Core footprint are deliberately left untouched.
+
+### Head and Worker identity / voice system
+
+- [x] Persistent owner-scoped profile entity and PostgreSQL migration; seed one separate fictional Head and ten independently named workers when the roster is seeded.
+- [x] Differentiate five female/five male workers by fictional personality, specialization, communication style, and appearance metadata; tie Worker model/provider/status to actual existing agent records.
+- [x] Apply saved Head identity/personality to assistant text and streaming prompts; retain owner-scoped saved conversation/headquarters-memory context.
+- [x] Head/Worker profile list/edit surface in Settings → Characters; Head voice is keyed independently of all Worker voices.
+- [x] Voice ID input, authenticated validation before save, matching metadata-gender check, per-character persistence, speed/stability/style/similarity controls where supported, actual audio preview, and reset-to-default route.
+- [x] Message-backed Head speak-aloud uses actual reply text and falls back to device TTS/text on service errors. Provider credentials are runtime server settings only.
+- [x] Mock suite identity/voice isolation/persistence/validation: `4 passed` targeted; `95 passed, 1 skipped, 1 warning` full backend suite.
+- [~] ElevenLabs adapter exists on server, but an authorized live request has not succeeded; NOVA-GATEWAY voice contract is unknown. Report explicitly blocks live integration claim.
+- [~] Worker IDs/configuration/preview are independent; automatic worker-chat TTS, a queued playback player/interruption UI, separate worker-profile placement, and device/audio lifecycle tests are not implemented.
+- [ ] Confirm NOVA-GATEWAY's voice API contract; configure server credentials; complete terms/consent/data-retention review, live validation+synthesis, physical-device tests, and APK secret scan. Android compilation blocked in this sandbox by missing JDK/SDK.

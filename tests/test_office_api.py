@@ -23,6 +23,13 @@ def test_office_state_is_persisted_owner_scoped_and_expandable():
     assert len({(item["position"]["x"],item["position"]["y"]) for item in state["agents"]})==11
     assert {room["name"] for room in state["layout"]["rooms"]} >= {"Head Office","Development","Design","Research","Security","Testing","Writing","Meeting Room","Server Room","Reception","Break Room","Memory Core"}
     assert any(item["kind"] == "memory_core" for item in state["layout"]["furniture"])
+    stations = [item for item in state["layout"]["furniture"] if item["kind"] == "personal_workstation"]
+    assert len(stations) == 11
+    assert len({item["id"] for item in stations}) == 11
+    assert {item["id"] for item in stations} == {f"workstation-{agent['identity']}" for agent in state["agents"]}
+    rooms = {room["id"]: room for room in state["layout"]["rooms"]}
+    for station in stations:
+        assert any(station["x"] >= room["x"] and station["y"] >= room["y"] and station["x"] + station["width"] <= room["x"] + room["width"] and station["y"] + station["height"] <= room["y"] + room["height"] for room in rooms.values())
     assert client.get("/api/v1/office/state",headers=other).json()["agents"]==[]
     db=TestingSession()
     try:
@@ -103,6 +110,24 @@ def test_legacy_default_office_get_adds_memory_core_without_moving_workers():
     assert any(item["kind"]=="memory_core" for item in refreshed["layout"]["furniture"])
     saved_position=next(agent["position"] for agent in refreshed["agents"] if agent["id"]==database_agent["id"])
     assert saved_position=={"x":31,"y":1}
+
+
+def test_untouched_legacy_stock_layout_gets_personal_workstations_without_moving_employees():
+    owner=auth_key(["agents:read","agents:write","office:read"])
+    seeded=client.post("/api/v1/agents/seed",headers=owner).json()
+    first=client.get("/api/v1/office/state",headers=owner).json()
+    before={agent["id"]:(agent["position"]["x"],agent["position"]["y"]) for agent in first["agents"]}
+    db=TestingSession()
+    try:
+        layout=db.query(OfficeLayout).filter_by(owner_key_id=_owner_id(owner)).one()
+        # Simulate the exact original stock furniture. Existing occupants stay put.
+        layout.furniture=[item for item in layout.furniture if item["kind"] != "personal_workstation"]
+        db.commit()
+    finally: db.close()
+    migrated=client.get("/api/v1/office/state",headers=owner).json()
+    assert len([item for item in migrated["layout"]["furniture"] if item["kind"]=="personal_workstation"])==11
+    assert {agent["id"]:(agent["position"]["x"],agent["position"]["y"]) for agent in migrated["agents"]}==before
+    assert len(seeded)==11
 
 
 def test_customized_office_layout_is_not_auto_rewritten_for_memory_core():

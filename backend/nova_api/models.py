@@ -88,6 +88,26 @@ class Agent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
+class CharacterProfile(Base):
+    """Owner-scoped character identity and independently assigned voice configuration."""
+    __tablename__ = "character_profiles"
+    __table_args__ = (UniqueConstraint("owner_key_id", "character_key", name="uq_character_profile_owner_key"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_key_id: Mapped[str] = mapped_column(ForeignKey("api_keys.id", ondelete="CASCADE"), index=True)
+    character_key: Mapped[str] = mapped_column(String(80), index=True)
+    agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    gender_identity: Mapped[str] = mapped_column(String(16))
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    personality: Mapped[str] = mapped_column(Text, default="")
+    specialization: Mapped[str] = mapped_column(String(180), default="")
+    communication_style: Mapped[str] = mapped_column(Text, default="")
+    appearance: Mapped[dict] = mapped_column(JSON, default=dict)
+    voice_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    voice_settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
 class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (Index("ix_tasks_owner_state_priority", "owner_key_id", "state", "priority"),)

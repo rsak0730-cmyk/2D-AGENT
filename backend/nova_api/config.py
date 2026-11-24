@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     gateway_allowed_hosts: str = ""
     credential_encryption_key: str = ""
     credential_encryption_key_previous: str = ""
+    elevenlabs_api_key: str = ""
+    elevenlabs_base_url: str = "https://api.elevenlabs.io/v1"
+    elevenlabs_model_id: str = "eleven_multilingual_v2"
 
 @lru_cache
 def get_settings() -> Settings:

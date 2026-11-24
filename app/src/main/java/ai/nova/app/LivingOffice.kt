@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateOffsetAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -73,6 +74,8 @@ import java.time.temporal.ChronoUnit
 @Composable
 internal fun LivingOfficeScene(
     agents: List<WorkforceAgent>,
+    characterProfiles: List<CharacterProfile>,
+    providerConnections: List<ProviderConnectionInfo>,
     tasks: List<WorkforceTask>,
     events: List<OfficeEvent>,
     messages: List<WorkforceMessage>,
@@ -97,11 +100,14 @@ internal fun LivingOfficeScene(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     var animationFrame by remember { mutableIntStateOf(0) }
-    LaunchedEffect(sceneResumed, reduceMotion) {
-        if (!sceneResumed || reduceMotion) return@LaunchedEffect
+    val activeVisualActivity = agents.any { it.status.equals("working", true) } || tasks.any { it.state in setOf("PLANNING", "ASSIGNED", "RUNNING") } ||
+        meetings.any { it.status.equals("running", true) } || events.any { isRecent(it.createdAt) && it.type in setOf("agent.message", "employee.movement.step") } ||
+        messages.any { isRecent(it.createdAt) } || world.characters.values.any { it.movementState == "walking" }
+    LaunchedEffect(sceneResumed, reduceMotion, activeVisualActivity) {
+        if (!sceneResumed || reduceMotion || !activeVisualActivity) return@LaunchedEffect
         while (isActive) {
-            delay(520)
-            animationFrame = (animationFrame + 1) % 4
+            delay(520L)
+            animationFrame = (animationFrame + 1) % 24
         }
     }
 
@@ -144,7 +150,7 @@ internal fun LivingOfficeScene(
                     },
                 ) {
                     Canvas(Modifier.fillMaxSize()) {
-                        drawHeadquarters(world, floorLeftPx, floorTopPx, cellPx, focusedRoomId, animationFrame, savedWorld == null, messages)
+                        drawHeadquarters(world, floorLeftPx, floorTopPx, cellPx, focusedRoomId, animationFrame, savedWorld == null, messages, characterProfiles)
                     }
                     world.rooms.forEach { room ->
                         Box(
@@ -163,6 +169,11 @@ internal fun LivingOfficeScene(
                     world.characters.values.forEach { character ->
                         val agent = agents.firstOrNull { it.id == character.agentId } ?: return@forEach
                         val task = assignedTaskFor(agent, tasks)
+                        val profileKey = if (agent.identity == "manager") "head" else agent.identity
+                        val profile = characterProfiles.firstOrNull { it.key == profileKey }
+                        val displayAgent = if (profile == null) agent else agent.copy(name = profile.name)
+                        val modelLabel = verifiedModelIdentity(agent, providerConnections)
+                        val modelStatus = modelConnectionStatus(agent, task, providerConnections)
                         val pose = workerPose(agent, task, agent.id in meetingAgents, agent.id in communicationAgents, character.movementState)
                         val spriteWidth = cellDp * 0.88f
                         val spriteHeight = cellDp * 1.46f
@@ -172,14 +183,18 @@ internal fun LivingOfficeScene(
                         )
                         val animated by animateOffsetAsState(destination, animationSpec = if (reduceMotion) snap() else tween(230), label = "worker-${agent.id}-step")
                         PixelWorkerSprite(
-                            agent = agent,
+                            agent = displayAgent,
                             pose = pose,
                             phase = animationFrame,
                             selected = focusedRoomId?.let { roomId -> world.rooms.firstOrNull { it.id == roomId }?.let { agentCellInside(agent.id, character, it) } } ?: false,
+                            modelIdentity = modelLabel,
+                            modelStatus = modelStatus,
+                            appearanceJson = profile?.appearanceJson,
+                            reduceMotion = reduceMotion,
                             modifier = Modifier.offset { IntOffset(animated.x.roundToInt(), animated.y.roundToInt()) }
                                 .size(spriteWidth, spriteHeight)
-                                .semantics { contentDescription = "${agent.name}, ${agent.title}, ${pose.name.lowercase()}, tap to open worker profile" }
-                                .clickable { onAgentSelected(agent) },
+                                .semantics { contentDescription = "${displayAgent.name}, ${agent.title}, ${pose.name.lowercase()}, model ${modelLabel ?: "unverified"}, ${modelStatus}, tap to open worker profile" }
+                                .clickable { onAgentSelected(displayAgent) },
                         )
                     }
                 }
@@ -296,8 +311,10 @@ private fun agentActivityLabel(agent: WorkforceAgent, tasks: List<WorkforceTask>
 }
 
 @Composable
-private fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: Int, selected: Boolean, modifier: Modifier = Modifier) {
-    val look = remember(agent.identity) { officeLook(agent.identity) }
+private fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: Int, selected: Boolean, modelIdentity: String?, modelStatus: String, appearanceJson: String?, reduceMotion: Boolean, modifier: Modifier = Modifier) {
+    val look = remember(agent.identity, appearanceJson) { officeLook(agent.identity, appearanceJson) }
+    val floatOffset by androidx.compose.animation.core.animateFloatAsState(if (!reduceMotion && phase % 2 == 0) -1.5f else if (reduceMotion) 0f else 1.5f, animationSpec = tween(1500), label = "hologram-float")
+    val glowAlpha by androidx.compose.animation.core.animateFloatAsState(if (!reduceMotion && phase % 3 != 0) 0.78f else 0.94f, animationSpec = tween(900), label = "hologram-glow")
     Box(modifier) {
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
@@ -310,9 +327,13 @@ private fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: In
             val hair = Color(look.hairArgb)
             val skin = Color(look.skinArgb)
             val accent = Color(look.accentArgb)
+            val eyes = Color(look.eyeArgb)
             val walk = if (pose == WorkerPose.WALKING) if (phase % 2 == 0) 0.055f else -0.055f else 0f
             val hand = if (pose in setOf(WorkerPose.TYPING, WorkerPose.TALKING, WorkerPose.MEETING) && phase % 2 == 0) 0.035f else 0f
-            val idleBob = if (pose == WorkerPose.IDLE && phase % 2 == 0) 0.012f else 0f
+            val idleBob = if (pose in setOf(WorkerPose.IDLE, WorkerPose.RESTING) && phase % 2 == 0) 0.012f else 0f
+            val headShift = if (pose == WorkerPose.IDLE && phase % 7 in 0..1) 0.012f else if (pose == WorkerPose.IDLE && phase % 7 in 4..5) -0.012f else 0f
+            val blinkStart = Math.floorMod(agent.identity.hashCode(), 22)
+            val blinking = pose != WorkerPose.WALKING && phase % 24 in blinkStart..(blinkStart + 1)
             val tired = pose == WorkerPose.RESTING
             val alert = pose == WorkerPose.ALERT
             val sitting = pose in setOf(WorkerPose.TYPING, WorkerPose.THINKING, WorkerPose.MEETING)
@@ -323,19 +344,52 @@ private fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: In
                 p(0.63f, 0.61f, 0.09f, 0.21f, Color(0xFF263C58))
             }
             val bodyTop = if (tired) 0.36f + idleBob else 0.34f - idleBob
-            p(0.34f, 0.12f - idleBob, 0.32f, 0.24f, skin)
+            val headWidth = when (look.faceShape) { 1 -> 0.34f; 2 -> 0.30f; 4 -> 0.27f; 5 -> 0.31f; else -> 0.32f }
+            val headLeft = (1f - headWidth) * 0.5f + headShift
+            val headY = 0.12f - idleBob
+            p(headLeft + headWidth * 0.08f, headY + 0.035f, headWidth * 0.84f, 0.19f, skin)
+            if (look.faceShape == 3) { p(headLeft + 0.06f, headY + 0.18f, 0.10f, 0.045f, skin); p(headLeft + headWidth - 0.16f, headY + 0.18f, 0.10f, 0.045f, skin) }
+            if (look.faceShape == 4) { p(headLeft + 0.07f, headY + 0.20f, headWidth - 0.14f, 0.025f, skin) }
+            val crownX = headLeft - 0.035f
+            val crownW = headWidth + 0.07f
             when (look.hairStyle) {
-                0 -> { p(0.30f, 0.075f - idleBob, 0.40f, 0.10f, hair); p(0.29f, 0.14f - idleBob, 0.07f, 0.17f, hair) }
-                1 -> { p(0.30f, 0.075f - idleBob, 0.40f, 0.10f, hair); p(0.61f, 0.13f - idleBob, 0.09f, 0.28f, hair) }
-                2 -> { p(0.31f, 0.08f - idleBob, 0.38f, 0.085f, hair); p(0.34f, 0.035f - idleBob, 0.08f, 0.075f, hair); p(0.51f, 0.025f - idleBob, 0.08f, 0.085f, hair) }
-                else -> { p(0.29f, 0.08f - idleBob, 0.42f, 0.11f, hair); p(0.28f, 0.14f - idleBob, 0.075f, 0.29f, hair); p(0.65f, 0.14f - idleBob, 0.075f, 0.29f, hair) }
+                0 -> { p(crownX, 0.075f - idleBob, crownW, 0.10f, hair); p(crownX, 0.14f - idleBob, 0.075f, 0.14f, hair); p(crownX + crownW * 0.78f, 0.13f - idleBob, 0.07f, 0.08f, hair) }
+                1 -> { p(crownX, 0.075f - idleBob, crownW, 0.095f, hair); p(crownX + crownW * 0.65f, 0.12f - idleBob, 0.12f, 0.20f, hair); p(crownX + 0.06f, 0.08f - idleBob, 0.22f, 0.06f, hair) }
+                2 -> { p(crownX, 0.075f - idleBob, crownW, 0.09f, hair); p(crownX - 0.005f, 0.14f - idleBob, 0.07f, 0.30f, hair); p(crownX + crownW - 0.06f, 0.14f - idleBob, 0.07f, 0.31f, hair); p(crownX + 0.12f, 0.045f - idleBob, 0.13f, 0.045f, hair); p(crownX + 0.29f, 0.045f - idleBob, 0.13f, 0.045f, hair) }
+                3 -> { p(crownX + 0.02f, 0.08f - idleBob, crownW - 0.04f, 0.07f, hair); p(crownX + 0.04f, 0.12f - idleBob, crownW - 0.08f, 0.035f, hair) }
+                4 -> { p(crownX + 0.07f, 0.045f - idleBob, crownW - 0.10f, 0.09f, hair); p(crownX, 0.12f - idleBob, 0.065f, 0.14f, hair); p(crownX + crownW - 0.055f, 0.12f - idleBob, 0.055f, 0.07f, hair) }
+                5 -> { p(crownX, 0.075f - idleBob, crownW, 0.09f, hair); p(crownX, 0.13f - idleBob, 0.065f, 0.30f, hair); p(crownX + crownW - 0.06f, 0.13f - idleBob, 0.06f, 0.27f, hair); p(crownX - 0.035f, 0.38f - idleBob, 0.07f, 0.055f, accent); p(crownX - 0.03f, 0.44f - idleBob, 0.06f, 0.055f, hair) }
+                6 -> { p(crownX, 0.07f - idleBob, crownW, 0.10f, hair); p(crownX - 0.01f, 0.14f - idleBob, 0.075f, 0.24f, hair); p(crownX + crownW - 0.065f, 0.14f - idleBob, 0.075f, 0.24f, hair) }
+                7 -> { p(crownX, 0.075f - idleBob, crownW, 0.085f, hair); p(crownX + 0.18f, 0.085f - idleBob, 0.20f, 0.055f, hair); p(crownX + crownW - 0.07f, 0.12f - idleBob, 0.07f, 0.16f, hair) }
+                8 -> { p(crownX, 0.085f - idleBob, crownW, 0.075f, hair); p(crownX + 0.05f, 0.035f - idleBob, 0.10f, 0.08f, hair); p(crownX + 0.19f, 0.025f - idleBob, 0.10f, 0.09f, hair); p(crownX + 0.32f, 0.045f - idleBob, 0.10f, 0.08f, hair); p(crownX - 0.025f, 0.16f - idleBob, 0.07f, 0.18f, hair); p(crownX + crownW - 0.04f, 0.16f - idleBob, 0.06f, 0.18f, hair) }
+                else -> { p(crownX, 0.075f - idleBob, crownW, 0.09f, hair); p(crownX + 0.08f, 0.04f - idleBob, 0.16f, 0.05f, hair); p(crownX + 0.29f, 0.045f - idleBob, 0.14f, 0.05f, hair); p(crownX + 0.02f, 0.15f - idleBob, 0.06f, 0.18f, hair) }
             }
-            p(0.41f, 0.235f - idleBob, 0.045f, 0.035f, Color(0xFF182438)); p(0.55f, 0.235f - idleBob, 0.045f, 0.035f, Color(0xFF182438))
-            if (look.accessory == 0 || look.accessory == 3) {
-                p(0.37f, 0.225f, 0.13f, 0.06f, Color(0x668FEAFF)); p(0.52f, 0.225f, 0.13f, 0.06f, Color(0x668FEAFF))
+            val eyeY = 0.235f - idleBob
+            val eyeColor = if (blinking) skin else eyes
+            val eyeHeight = if (blinking) 0.012f else 0.035f
+            p(headLeft + headWidth * 0.25f, eyeY, headWidth * 0.13f, eyeHeight, eyeColor)
+            p(headLeft + headWidth * 0.64f, eyeY, headWidth * 0.13f, eyeHeight, eyeColor)
+            val browLift = if (pose == WorkerPose.ALERT) -0.012f else if (pose == WorkerPose.THINKING) -0.005f else 0f
+            p(headLeft + headWidth * 0.20f, eyeY - 0.025f + browLift, headWidth * 0.20f, 0.018f, hair)
+            p(headLeft + headWidth * 0.60f, eyeY - 0.025f - browLift, headWidth * 0.20f, 0.018f, hair)
+            p(headLeft + headWidth * 0.49f, eyeY + 0.025f, 0.025f, 0.035f, skin.copy(red = (skin.red * 0.88f).coerceIn(0f, 1f)))
+            if (pose == WorkerPose.TALKING || pose == WorkerPose.MEETING) p(headLeft + headWidth * 0.43f, eyeY + 0.07f, headWidth * 0.16f, if (phase % 2 == 0) 0.045f else 0.025f, Color(0xFF7D3948))
+            else p(headLeft + headWidth * 0.43f, eyeY + 0.075f, headWidth * 0.16f, 0.018f, Color(0xFF7D3948))
+            if (look.accessoryName.contains("glasses", true)) {
+                p(headLeft + headWidth * 0.14f, eyeY - 0.015f, headWidth * 0.31f, 0.07f, Color(0x668FEAFF)); p(headLeft + headWidth * 0.55f, eyeY - 0.015f, headWidth * 0.31f, 0.07f, Color(0x668FEAFF)); p(headLeft + headWidth * 0.44f, eyeY + 0.005f, headWidth * 0.13f, 0.014f, accent)
+            } else if (look.accessoryName.contains("clip", true) || look.accessoryName.contains("pin", true)) {
+                p(crownX + crownW * 0.72f, 0.09f, 0.07f, 0.07f, accent)
             }
-            p(0.31f, bodyTop, 0.38f, 0.28f, shirt)
-            p(0.31f, bodyTop + 0.18f, 0.38f, 0.04f, accent.copy(alpha = 0.78f))
+            val shoulders = when (look.bodyType) { 1, 3, 4 -> 0.42f; 2, 5 -> 0.33f; else -> 0.38f }
+            val torsoLeft = (1f - shoulders) * 0.5f
+            p(torsoLeft, bodyTop, shoulders, 0.28f, shirt)
+            when (look.outfitStyle) {
+                0 -> { p(torsoLeft + shoulders * 0.43f, bodyTop, shoulders * 0.14f, 0.27f, accent.copy(alpha = 0.85f)); p(torsoLeft + shoulders * 0.15f, bodyTop + 0.05f, shoulders * 0.18f, 0.04f, Color.White.copy(alpha = 0.45f)) }
+                1 -> { p(torsoLeft + shoulders * 0.12f, bodyTop + 0.04f, shoulders * 0.76f, 0.045f, accent.copy(alpha = 0.9f)); p(torsoLeft + shoulders * 0.45f, bodyTop + 0.10f, shoulders * 0.1f, 0.18f, Color.White.copy(alpha = 0.4f)) }
+                2 -> { p(torsoLeft + shoulders * 0.12f, bodyTop + 0.04f, shoulders * 0.76f, 0.04f, accent); p(torsoLeft + shoulders * 0.12f, bodyTop + 0.11f, shoulders * 0.76f, 0.035f, accent.copy(alpha = 0.6f)) }
+                3 -> { p(torsoLeft + shoulders * 0.10f, bodyTop + 0.10f, shoulders * 0.18f, 0.14f, accent.copy(alpha = 0.8f)); p(torsoLeft + shoulders * 0.72f, bodyTop + 0.10f, shoulders * 0.18f, 0.14f, accent.copy(alpha = 0.8f)) }
+                else -> { p(torsoLeft + shoulders * 0.08f, bodyTop + 0.18f, shoulders * 0.84f, 0.04f, accent.copy(alpha = 0.8f)) }
+            }
             when (pose) {
                 WorkerPose.THINKING -> {
                     p(0.68f, 0.39f, 0.12f, 0.17f, skin); p(0.63f, 0.30f, 0.12f, 0.11f, skin)
@@ -375,6 +429,22 @@ private fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: In
                 setShadowLayer(h * 0.025f, 0f, h * 0.012f, Color.Black.toArgb())
             }
             drawContext.canvas.nativeCanvas.drawText(agent.name.take(14), w * 0.5f, h * 0.99f, paint)
+        }
+        androidx.compose.material3.Surface(
+            modifier = Modifier.align(Alignment.TopCenter).offset(y = (-15).dp + floatOffset.dp)
+                .widthIn(max = 112.dp).border(0.7.dp, Color(0x9F8CEEFF).copy(alpha = glowAlpha), RoundedCornerShape(6.dp))
+                .graphicsLayer { alpha = glowAlpha },
+            shape = RoundedCornerShape(6.dp),
+            color = Color(0xE60A1728),
+            shadowElevation = 5.dp,
+        ) {
+            Column(Modifier.padding(horizontal = 5.dp, vertical = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(if (modelIdentity == null) "[ MODEL UNVERIFIED ]" else "[ $modelIdentity ]", color = Color(0xFFF0FBFF), fontSize = 7.sp, maxLines = 1, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    androidx.compose.foundation.Canvas(Modifier.size(4.dp)) { drawCircle(if (modelStatus in setOf("Working", "Thinking", "Connected")) Color(0xFF70E8C2) else Color(0xFFFFC477)) }
+                    Text(modelStatus, color = Color(0xFFB7D9EC), fontSize = 6.sp, maxLines = 1)
+                }
+            }
         }
     }
 }
@@ -444,7 +514,7 @@ private fun DrawScope.drawNightCity(frame: Int) {
     drawRect(Color(0xFF75DFF8).copy(alpha = 0.43f), Offset(towerLeft, towerTop), Size(towerWidth, towerHeight), style = Stroke(max(1.5f, width * 0.004f)))
 }
 
-private fun DrawScope.drawHeadquarters(world: OfficeWorld, left: Float, top: Float, cell: Float, selectedRoom: String?, frame: Int, preview: Boolean, messages: List<WorkforceMessage>) {
+private fun DrawScope.drawHeadquarters(world: OfficeWorld, left: Float, top: Float, cell: Float, selectedRoom: String?, frame: Int, preview: Boolean, messages: List<WorkforceMessage>, characterProfiles: List<CharacterProfile>) {
     val x0 = left
     val y0 = top
     val floorW = world.width * cell
@@ -491,7 +561,7 @@ private fun DrawScope.drawHeadquarters(world: OfficeWorld, left: Float, top: Flo
             drawRect(Color(0xFF7CE9FF).copy(alpha = 0.85f), Offset(rx - cell * 0.12f, ry - cell * 0.12f), Size(rw + cell * 0.24f, rh + cell * 0.24f), style = Stroke(cell * 0.12f))
         }
     }
-    world.furniture.forEach { item -> drawFurniture(item, x0, y0, cell, frame) }
+    world.furniture.forEach { item -> drawFurniture(item, x0, y0, cell, frame, characterProfiles) }
     messages.filter { isRecent(it.createdAt) && it.recipientAgentId != null }.takeLast(8).forEach { message ->
         val sender = world.characters[message.senderAgentId] ?: return@forEach
         val recipientId = message.recipientAgentId ?: return@forEach
@@ -536,7 +606,7 @@ private fun DrawScope.drawOfficePlant(x: Float, y: Float, cell: Float) {
     drawLine(Color(0xFF8CF3BD), Offset(x + cell * 0.5f, y + cell * 0.36f), Offset(x + cell * 0.78f, y + cell * 0.19f), cell * 0.08f)
 }
 
-private fun DrawScope.drawFurniture(item: OfficeFurnitureInfo, left: Float, top: Float, cell: Float, frame: Int) {
+private fun DrawScope.drawFurniture(item: OfficeFurnitureInfo, left: Float, top: Float, cell: Float, frame: Int, characterProfiles: List<CharacterProfile>) {
     val width = if (item.rotation == 90 || item.rotation == 270) item.height else item.width
     val height = if (item.rotation == 90 || item.rotation == 270) item.width else item.height
     val x = left + item.x * cell
@@ -554,6 +624,54 @@ private fun DrawScope.drawFurniture(item: OfficeFurnitureInfo, left: Float, top:
             drawLine(Color(0xFF8379FC), Offset(x + w * 0.34f, y - cell * 0.25f), Offset(x + w * 0.61f, y - cell * 0.25f), cell * 0.025f)
             drawRect(Color(0xFF38425A), Offset(x + w * 0.65f, y + h * 0.62f), Size(cell * 0.58f, cell * 0.25f))
             drawRect(Color(0xFF222E44), Offset(x + w * 0.70f, y + h * 0.84f), Size(cell * 0.48f, cell * 0.08f))
+        }
+        "personal_workstation" -> {
+            val identity = item.id.removePrefix("workstation-")
+            val profileKey = if (identity == "manager") "head" else identity
+            val look = officeLook(identity, characterProfiles.firstOrNull { it.key == profileKey }?.appearanceJson)
+            val wood = Color(look.shirtArgb).copy(alpha = 0.92f)
+            val trim = Color(look.accentArgb)
+            // Personal chair, desktop, monitor/computer, keyboard and mouse are one
+            // persisted workstation object so visual overlays do not block path cells.
+            drawRect(Color(0xFF27364C), Offset(x + cell * 1.08f, y + cell * 0.40f), Size(cell * 0.82f, cell * 0.22f))
+            drawRect(Color(0xFF384A61), Offset(x + cell * 1.16f, y + cell * 0.59f), Size(cell * 0.64f, cell * 0.13f))
+            drawRect(Color(0xFF45576D), Offset(x + cell * 1.42f, y + cell * 0.69f), Size(cell * 0.10f, cell * 0.18f))
+            drawRect(Color(0xFF35475D), Offset(x + cell * 1.08f, y + cell * 0.86f), Size(cell * 0.80f, cell * 0.08f))
+            drawRect(Color(0xFF151F31), Offset(x + cell * 0.10f, y + cell * 0.23f), Size(cell * 2.80f, cell * 0.20f))
+            drawRect(wood, Offset(x, y + cell * 0.17f), Size(cell * 3f, cell * 0.18f))
+            drawRect(trim.copy(alpha = 0.9f), Offset(x + cell * 0.08f, y + cell * 0.18f), Size(cell * 2.84f, cell * 0.035f))
+            drawRect(Color(0xFF29394E), Offset(x + cell * 0.18f, y + cell * 0.34f), Size(cell * 0.14f, cell * 0.55f))
+            drawRect(Color(0xFF29394E), Offset(x + cell * 2.68f, y + cell * 0.34f), Size(cell * 0.14f, cell * 0.55f))
+            drawRect(Color(0xFF11192A), Offset(x + cell * 0.70f, y - cell * 0.55f), Size(cell * 1.62f, cell * 0.67f))
+            drawRect(Color(0xFF2D4762), Offset(x + cell * 0.76f, y - cell * 0.49f), Size(cell * 1.50f, cell * 0.54f))
+            drawRect(Color(0xFF14253A), Offset(x + cell * 0.82f, y - cell * 0.45f), Size(cell * 1.38f, cell * 0.43f))
+            when (identity) {
+                "ui-ux", "game" -> {
+                    val swatches = listOf(Color(0xFFFF758E), Color(0xFFFFD05E), trim, Color(0xFF68D9F2))
+                    swatches.forEachIndexed { index, color -> drawRect(color, Offset(x + cell * (0.88f + index * 0.29f), y - cell * 0.39f), Size(cell * 0.19f, cell * 0.16f)) }
+                    drawLine(Color.White.copy(alpha = 0.8f), Offset(x + cell * 0.9f, y - cell * 0.12f), Offset(x + cell * 1.95f, y - cell * 0.12f), cell * 0.025f)
+                }
+                "research" -> {
+                    for (row in 0..3) drawLine(if (row % 2 == 0) Color(0xFFB5DDF7) else trim, Offset(x + cell * 0.91f, y - cell * (0.38f - row * 0.075f)), Offset(x + cell * (1.55f + (row % 2) * 0.42f), y - cell * (0.38f - row * 0.075f)), cell * 0.025f)
+                    drawCircle(Color(0xFF79E4D5), cell * 0.11f, Offset(x + cell * 1.94f, y - cell * 0.31f), style = Stroke(cell * 0.025f))
+                }
+                "manager" -> {
+                    for (bar in 0..4) drawRect(if (bar % 2 == 0) trim else Color(0xFF70D8E8), Offset(x + cell * (0.92f + bar * 0.22f), y - cell * (0.12f + (bar % 3) * 0.06f)), Size(cell * 0.12f, cell * (0.12f + (bar % 3) * 0.06f)))
+                }
+                "security" -> { drawRect(Color(0xFF71E6CE), Offset(x + cell * 1.01f, y - cell * 0.34f), Size(cell * 0.26f, cell * 0.23f)); drawLine(trim, Offset(x + cell * 1.46f, y - cell * 0.34f), Offset(x + cell * 2.02f, y - cell * 0.34f), cell * 0.03f) }
+                "database" -> { for (row in 0..3) drawLine(trim.copy(alpha = 0.85f - row * 0.12f), Offset(x + cell * 0.90f, y - cell * (0.38f - row * 0.08f)), Offset(x + cell * 2.03f, y - cell * (0.38f - row * 0.08f)), cell * 0.028f) }
+                else -> { for (row in 0..3) drawLine(if (row % 2 == 0) trim else Color(0xFF77DFF0), Offset(x + cell * 0.91f, y - cell * (0.37f - row * 0.08f)), Offset(x + cell * (1.55f + (row % 2) * 0.36f), y - cell * (0.37f - row * 0.08f)), cell * 0.025f) }
+            }
+            // Keyboard/mouse plus role-specific desk details.
+            drawRect(Color(0xFFAFBBC7), Offset(x + cell * 0.92f, y + cell * 0.05f), Size(cell * 0.86f, cell * 0.075f))
+            for (key in 0..6) drawLine(Color(0xFF52667A), Offset(x + cell * (0.98f + key * 0.105f), y + cell * 0.065f), Offset(x + cell * (0.98f + key * 0.105f), y + cell * 0.11f), cell * 0.014f)
+            drawOval(Color(0xFFD2DCE6), Offset(x + cell * 1.92f, y + cell * 0.05f), Size(cell * 0.19f, cell * 0.12f))
+            if (identity == "research" || identity == "documentation") {
+                drawRect(Color(0xFFEEE5C8), Offset(x + cell * 0.10f, y + cell * 0.02f), Size(cell * 0.48f, cell * 0.13f))
+                drawLine(Color(0xFF60738A), Offset(x + cell * 0.16f, y + cell * 0.06f), Offset(x + cell * 0.49f, y + cell * 0.06f), cell * 0.015f)
+            } else if (identity == "android" || identity == "web" || identity == "backend" || identity == "game") {
+                drawRect(trim, Offset(x + cell * 2.40f, y + cell * 0.02f), Size(cell * 0.32f, cell * 0.13f))
+            }
         }
         "meeting_table" -> {
             drawRect(Color(0xFF563B51), Offset(x + cell * 0.12f, y + cell * 0.12f), Size(w - cell * 0.24f, h - cell * 0.20f))

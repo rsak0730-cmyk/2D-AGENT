@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,11 +25,13 @@ def test_example_environment_contains_no_live_provider_or_gateway_credentials():
             assert value == "" or value.startswith("replace-with-") or value == "gateway.example.org"
 
 
-def test_android_only_sends_gateway_token_and_never_configures_upstream_key_field():
+def test_android_sends_provider_key_only_to_gateway_without_persisting_it():
     source = (ROOT / "app/src/main/java/ai/nova/app/MainActivity.kt").read_text()
-    assert "Only restricted gateway credentials may be entered in the app" in source
-    assert "private fun saveProviderConfiguration(base: String, token: String, model: String)" in source
-    # The sole api_key request-body field belongs to the restricted gateway save helper.
-    assert source.count('.put("api_key", apiKey.trim())') == 1
-    assert 'provider !in listOf("claude_gateway", "openai_compatible", "anthropic_compatible")' in source
-    assert not re.search(r'providerKey\s+by\s+remember', source)
+    gateway = (ROOT / "app/src/main/java/ai/nova/app/GatewayApi.kt").read_text()
+    assert "saveProviderConfiguration" not in source
+    assert 'client.request("/v1/gateways", "POST", payload)' in gateway
+    assert '.put("api_key", oneShotKey)' in gateway
+    assert 'providerKey = ""' in gateway
+    assert 'secure.put("provider_api_key"' not in gateway
+    assert 'settings.put("provider_api_key"' not in source
+    assert "GatewayClient" in source and "gatewayHeadOrchestrate" in source
