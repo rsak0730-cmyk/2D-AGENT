@@ -1,5 +1,7 @@
 # NOVA API and protocol gateway
 
+> This document describes the separate legacy FastAPI/backend API for operators and server integrations. It is not the Android login or onboarding guide. The current NOVA Android client connects to NOVA Central Server with device-installation credentials and never requests a user/API/provider key.
+
 FastAPI serves OpenAPI at `/openapi.json` and Swagger at `/docs`. NOVA's first-party endpoints are under `/api/v1`; assistant, provider-connection, workforce, task, memory, event, office, persistent employee-chat, meetings/collaboration, and administration operations remain available with their documented scopes.
 
 ## Application authentication
@@ -90,7 +92,7 @@ The backend includes a native Gemini REST adapter for model discovery and `gener
 
 ## External gateway connections
 
-Use Android **Settings → Configure multi-provider router** and provider identity `openai_compatible`, `anthropic_compatible`, or the retained `claude_gateway` adapter. Enter the gateway's HTTPS `/v1` base URL and its restricted gateway access token. Upstream provider keys belong at that gateway or in the backend runtime secret manager. The backend requires the exact hostname in `NOVA_GATEWAY_ALLOWED_HOSTS`; wildcard hosts, credentials embedded in URLs, query/fragment strings, non-HTTPS URLs, non-default ports, and paths other than `/v1` are rejected. The token is encrypted at rest with `NOVA_CREDENTIAL_ENCRYPTION_KEY`, never returned to clients, and never sent from NOVA directly to an upstream model API.
+In a legacy Android build only, **Settings → Configure multi-provider router** accepted a restricted external-gateway token. The current zero-login Central Server client does not expose that flow or accept gateway tokens. For backend operators, provider identity `openai_compatible`, `anthropic_compatible`, or the retained `claude_gateway` adapter can be configured server-side with an HTTPS `/v1` base URL and restricted gateway access token. Upstream provider keys belong at that gateway or in the backend runtime secret manager. The backend requires the exact hostname in `NOVA_GATEWAY_ALLOWED_HOSTS`; wildcard hosts, credentials embedded in URLs, query/fragment strings, non-HTTPS URLs, non-default ports, and paths other than `/v1` are rejected. The token is encrypted at rest with `NOVA_CREDENTIAL_ENCRYPTION_KEY`, never returned to clients, and never sent from NOVA directly to an upstream model API.
 
 The gateway test performs model listing, not inference. Custom gateway adapters support either OpenAI-compatible `/models` and `/chat/completions` or Anthropic-compatible `/models` and `/messages`. Each NOVA owner can save one connection per gateway type. The gateway facade routes through owner-configured connection priority and bounded fallbacks only when the same exact model is available.
 

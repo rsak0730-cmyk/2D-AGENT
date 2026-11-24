@@ -1,27 +1,27 @@
-# NOVA Android ↔ NOVA-GATEWAY
+# NOVA Android ↔ NOVA Central Server
 
-The Android client targets `https://gateway-server-mea8.onrender.com` and the workspace WebSocket `wss://gateway-server-mea8.onrender.com/ws/{workspace_id}?token={access_token}`. This endpoint was wired from the supplied contract. No live request has been made from this workspace, so deployed response compatibility remains unverified.
+The native Android app connects to `https://gateway-server-mea8.onrender.com`. The user flow is **INSTALL → OPEN → USE NOVA**. The device registers itself automatically on first launch; regular users are never asked to create an account, sign in, or supply an AI provider/gateway key.
 
-## Authentication and secrets
+## Installation authentication
 
-- Register/login use `/v1/auth/register` and `/v1/auth/login`.
-- Authenticated REST requests send `Authorization: Bearer <access_token>` and `X-Workspace-Id: <workspace_id>`.
-- A `401` triggers `/v1/auth/refresh`; refreshed credentials replace the stored values. If refresh fails, the session is cleared.
-- Only `access_token`, `refresh_token`, and `workspace_id` are persisted for the gateway session. `SecureSettings` encrypts values with an Android Keystore AES-GCM key.
-- Old NOVA API base/token preferences are cleared on app startup. Provider keys are never compiled into the APK or written to preferences/files. The gateway-registration form sends a provider key in the HTTPS `/v1/gateways` request body and immediately clears its input; the gateway is responsible for storing it.
+1. The app generates a random UUID `device_id` once and stores it encrypted with the Android Keystore-backed `SecureSettings` store.
+2. First launch calls `POST /v1/installations/register` with `{ "device_id": "…", "app_version": "1.0.0" }`.
+3. The returned `installation_id`, `workspace_id`, `installation_token`, and `expires_at` are encrypted at rest. No user account, provider credential, administrator credential, or provider API key is stored or packaged in the app.
+4. Authenticated REST requests send `X-Workspace-Id` and `X-Installation-Token`. When expiry is within five minutes, or a request returns 401, the client calls `POST /v1/installations/refresh` using the installation ID/token and retries an unauthorized request once.
+5. If installation/refresh fails, the UI reports a connection problem and offers retry. It does not switch to user login or an offline/fabricated AI response.
 
-## Current Android screens and endpoints
+Registration has no existing workspace/token headers because the server has not issued them yet. The refresh request includes the current workspace and installation-token headers as well as the required refresh body.
 
-The workspace screen loads Head status, workers, gateways, Head/worker model pools, tasks, messages, memory, and activity. It offers Head orchestration, worker model assignment/chat, task/message/memory creation, gateway registration, and model discovery. Workspace JSON events are received over WebSocket, workspace-checked, and displayed; the socket reconnects with backoff.
+## Endpoint integration
 
-The Chat screen submits to the gateway Head orchestration API. It is a request/response operation in this client, not SSE/delta streaming. The Projects screen reads/creates records through the already-used `/v1/tasks` collection. The documented/current client surface does not expose a distinct project entity API, so tasks are not represented as fabricated projects.
+- Model catalog: `GET /v1/models` and `GET /v1/models/families`.
+- Agent permissions: `GET /v1/agents/head/permissions` and `GET /v1/agents/worker_1/permissions` through `worker_10`.
+- Chat: `POST /v1/chat/completions` with the model assignment read from the permission response, the user message, `max_tokens: 512`, and the canonical `agent_key`. The app does not select a provider, make inference calls, or perform failover. It refuses to guess a model if the server has not returned an assignment.
+- Workspace data: `GET/POST /v1/tasks`, `/v1/messages`, and `/v1/memory`, plus `GET /v1/activity`. Projects displays task records (there is no separate project resource in the supplied contract).
+- Voice: `POST /v1/voice/tts`; if the Gateway does not return audio, the app keeps the assistant reply as text and reports the fallback. It does not route voice through a provider directly.
 
-The Agents screen includes the specified character identity catalog and labels live values as unavailable/unverified unless returned by a backend. Its current `WorkforceAgent`/`CharacterProfile` live binding still belongs to the legacy NOVA REST client and is not populated by the Gateway session. The Gateway workspace screen can show the server-returned worker records, but the Android project has no verified Gateway response schema for lossless mapping into canonical character profiles or office sprites.
-
-The two-floor HQ is a native visual layout preview. The repository's legacy NOVA backend has one grid-based office and no floors; the Gateway contract has no office positioning, floor transitions, or stair movement routes. Therefore the client does not infer that a character changed floors or show an authoritative task/activity unless a backend record supplies it. See [Headquarters](HEADQUARTERS.md).
-
-Character voice/profile APIs exist in the separate NOVA backend (`/api/v1/characters` and its voice routes), but they are not exposed by the Android Gateway API. Do not configure a second client credential or invent gateway endpoints to reach them; a supported, workspace-scoped Gateway contract is needed to connect those controls under the app's JWT-only storage rule.
+Gateway responses remain authoritative. The app doesn't fabricate task execution, agent activity, model assignment, or permissions. `GatewayWorkspaceScreen` shows returned model catalog, family, permission, task, message, memory and activity data. The Headquarters/character roster still relies on a separate legacy REST shape that is not exposed in the supplied Gateway contract, so this integration does not pretend to map missing office/profile data into live Gateway records.
 
 ## Verification limits
 
-No request was made to the live host. Android compilation/APK generation is verified only when the GitHub Actions Android workflow succeeds. This does not prove Gateway live response schema, image-reference fidelity, project entities, Gateway-backed profile/voice data, model provenance, or floor-aware movement. The supplied character and office reference images were not present in this checkout; the native illustration is not claimed as an exact reproduction.
+No live request has been made to the deployed Gateway from this workspace, so endpoint response compatibility and server-side installation policy remain unverified. The Android code and debug APK must be compiled in the Java-enabled CI workflow. If permission responses do not contain a recognizable assigned-model field, chat fails closed with a clear message rather than choosing an arbitrary catalog model. The current client uses `/v1/chat/completions`; the supplied model-specific `/v1/models/{model_identity_id}/chat` route is not needed for the agent-key completion flow.

@@ -4,26 +4,31 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 
 class GatewayApiTest {
     @Test
-    fun gatewayEndpointsUseProvidedLiveHost() {
+    fun gatewayUsesTheProvidedCentralServer() {
         assertEquals("https://gateway-server-mea8.onrender.com", NOVA_GATEWAY_BASE)
     }
 
     @Test
-    fun providerBaseUrlRequiresHttpsAndRejectsEmbeddedCredentials() {
-        assertTrue(isSecureProviderBaseUrl("https://api.example.com/v1"))
-        assertFalse(isSecureProviderBaseUrl("http://api.example.com"))
-        assertFalse(isSecureProviderBaseUrl("https://secret@api.example.com"))
-        assertFalse(isSecureProviderBaseUrl("https://api.example.com/?key=secret"))
+    fun canonicalWorkerIdentitiesMapToInstallationAgentKeys() {
+        assertEquals("worker_1", gatewayAgentKey("android"))
+        assertEquals("worker_2", gatewayAgentKey("research"))
+        assertEquals("worker_10", gatewayAgentKey("game"))
+    }
+
+    @Test(expected = java.io.IOException::class)
+    fun unknownWorkerIdentityDoesNotInventAnAgentKey() {
+        gatewayAgentKey("unknown")
     }
 
     @Test
-    fun workerAndModelPathIdsRejectUnsafeSegments() {
-        assertTrue(isSafeGatewayId("worker_01-uuid"))
-        assertFalse(isSafeGatewayId("../../admin"))
-        assertFalse(isSafeGatewayId("worker/other"))
-        assertFalse(isSafeGatewayId("worker?token=leak"))
+    fun installationRefreshWindowUsesServerExpiryAndFiveMinuteSkew() {
+        val now = Instant.parse("2026-11-22T00:00:00Z").toEpochMilli()
+        assertTrue(isInstallationExpiring("2026-11-22T00:04:00Z", now))
+        assertFalse(isInstallationExpiring("2026-11-22T00:06:00Z", now))
+        assertTrue(isInstallationExpiring("invalid", now))
     }
 }

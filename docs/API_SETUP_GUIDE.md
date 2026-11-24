@@ -1,5 +1,7 @@
 # API and credential setup
 
+> **Backend operator instructions.** Current Android onboarding is zero-login and does not accept user/provider API keys or gateway access tokens. Configure provider secrets only in the centrally managed backend/gateway runtime; see [Android setup](ANDROID_SETUP.md) for the mobile flow.
+
 **Never commit API keys.** NOVA's assistant sends model requests from the backend. The Android app does not accept upstream provider keys; configure those only as backend runtime secrets or in an external gateway's secret manager. Android may save a restricted gateway token to the backend over HTTPS, where it is encrypted at rest. Use eligible accounts and current provider terms; availability, pricing, quotas and age eligibility can change.
 
 ## Arena — implemented adapter

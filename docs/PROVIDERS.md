@@ -1,5 +1,7 @@
 # Provider connections, free access, and quotas
 
+> **Backend operator/legacy details.** The current Android client does not collect restricted gateway tokens or upstream provider keys. Regular users connect automatically to NOVA Central Server; keep provider credentials in server-side secret managers only.
+
 For the strict client-secret boundary, upstream provider API keys must be injected into the NOVA backend runtime secret environment (or configured in the external gateway); ordinary NOVA app clients cannot submit them through the settings APIs. The Android app can store only a restricted external-gateway access token, sent to the configured HTTPS NOVA backend and encrypted at rest using `NOVA_CREDENTIAL_ENCRYPTION_KEY`. It is never sent directly to an upstream AI provider. Do not put the OG administrator token in the app. Existing legacy encrypted provider records remain backend-side and are never returned to clients.
 
 NOVA discovers model IDs from each provider account. Use the returned exact ID; model names and free availability can change. There is no universal free tier, no fixed 11-model requirement, and no unlimited quota promise.

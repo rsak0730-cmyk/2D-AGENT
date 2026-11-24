@@ -38,29 +38,26 @@ import org.json.JSONObject
 
 /** Project work is shown from the gateway's existing task collection; no project API is fabricated. */
 @Composable
-internal fun GatewayProjectsScreen(client: GatewayClient, onOpenGateway: () -> Unit, modifier: Modifier = Modifier) {
+internal fun GatewayProjectsScreen(client: GatewayClient, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
-    var snapshot by remember { mutableStateOf<GatewaySnapshot?>(null) }
+    var tasks by remember { mutableStateOf<JSONArray?>(null) }
+    var session by remember { mutableStateOf(client.session()) }
     var busy by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf("Sign in to NOVA-GATEWAY to load real task records.") }
+    var notice by remember { mutableStateOf("Connecting to NOVA-GATEWAY automatically…") }
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
 
     val refresh: suspend () -> Unit = {
-        if (client.session() == null) {
-            snapshot = null
-            notice = "Sign in to NOVA-GATEWAY to load workspace projects and tasks."
-        } else {
-            busy = true
-            try {
-                snapshot = withContext(Dispatchers.IO) { client.loadSnapshot() }
-                notice = "Live NOVA-GATEWAY task records · ${snapshot?.tasks?.length() ?: 0} items"
-            } catch (error: Exception) {
-                notice = error.message ?: "Could not load gateway task data"
-            } finally { busy = false }
-        }
+        busy = true
+        try {
+            session = withContext(Dispatchers.IO) { client.ensureInstallation() }
+            tasks = withContext(Dispatchers.IO) { client.loadTasks() }
+            notice = "Live NOVA-GATEWAY task records · ${tasks?.length() ?: 0} items"
+        } catch (error: Exception) {
+            notice = error.message ?: "Could not load gateway task data"
+        } finally { busy = false }
     }
-    LaunchedEffect(client.session()?.workspaceId) { refresh() }
+    LaunchedEffect(Unit) { refresh() }
 
     Column(modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth()) {
@@ -76,12 +73,12 @@ internal fun GatewayProjectsScreen(client: GatewayClient, onOpenGateway: () -> U
                 Modifier.fillMaxWidth().padding(11.dp), style = MaterialTheme.typography.labelSmall, color = Color(0xFFD9D0FF),
             )
         }
-        if (client.session() == null) {
+        if (session == null) {
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFF111A2B))) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Workspace not connected", style = MaterialTheme.typography.titleMedium)
+                    Text("Connecting to your NOVA workspace", style = MaterialTheme.typography.titleMedium)
                     Text(notice, style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = onOpenGateway) { Text("Sign in to NOVA-GATEWAY") }
+                    Button(enabled = !busy, onClick = { scope.launch { refresh() } }) { Text("Retry connection") }
                 }
             }
         } else {
@@ -106,10 +103,10 @@ internal fun GatewayProjectsScreen(client: GatewayClient, onOpenGateway: () -> U
                 }
             }) { Text("Create gateway task") }
             Text(notice, style = MaterialTheme.typography.labelSmall)
-            if (busy && snapshot == null) CircularProgressIndicator()
+            if (busy && tasks == null) CircularProgressIndicator()
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                val tasks = snapshot?.tasks ?: JSONArray()
-                items((0 until tasks.length()).map { tasks.optJSONObject(it) ?: JSONObject().put("record", tasks.opt(it)) }, key = { it.optString("id", "task-$it") }) { task ->
+                val records = tasks ?: JSONArray()
+                items((0 until records.length()).map { records.optJSONObject(it) ?: JSONObject().put("record", records.opt(it)) }, key = { it.optString("id", "task-$it") }) { task ->
                     val taskTitle = task.optString("title").takeIf(String::isNotBlank) ?: task.optString("name").takeIf(String::isNotBlank) ?: "Gateway task"
                     val state = task.optString("state").takeIf(String::isNotBlank) ?: task.optString("status").takeIf(String::isNotBlank) ?: "State not provided"
                     val progress = task.optInt("progress_percent", -1)
@@ -133,11 +130,11 @@ internal fun GatewayProjectsScreen(client: GatewayClient, onOpenGateway: () -> U
                             val error = task.optString("error").takeIf(String::isNotBlank)
                             if (result != null) Text(result, style = MaterialTheme.typography.bodySmall)
                             if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                            Text("Backend record · ${task.toString().take(1100)}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF879DBA))
+                            Text("Backend record · ${redactGatewayJson(task.toString()).take(1100)}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF879DBA))
                         }
                     }
                 }
-                if (snapshot != null && snapshot!!.tasks.length() == 0) item { Text("No tasks returned by NOVA-GATEWAY.", Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (tasks != null && tasks!!.length() == 0) item { Text("No tasks returned by NOVA-GATEWAY.", Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
     }

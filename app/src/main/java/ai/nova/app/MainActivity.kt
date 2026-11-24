@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import android.media.MediaPlayer
-import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -29,7 +28,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -96,47 +94,24 @@ private fun NovaApp(settings: SecureSettings) {
     val context = LocalContext.current
     val gatewayClient = remember(settings) { GatewayClient(settings) }
     var gatewaySession by remember { mutableStateOf(gatewayClient.session()) }
-    var speechEngine by remember { mutableStateOf<TextToSpeech?>(null) }
-    var speechInitializing by remember { mutableStateOf(false) }
-    var pendingSpeech by remember { mutableStateOf<String?>(null) }
+    var gatewayConnectionStatus by remember { mutableStateOf("Connecting to NOVA Central Server…") }
+    LaunchedEffect(gatewayClient) {
+        try {
+            gatewaySession = withContext(Dispatchers.IO) { gatewayClient.ensureInstallation() }
+            gatewayConnectionStatus = "Connected to NOVA Central Server · ${gatewaySession?.workspaceId}"
+        } catch (error: Exception) {
+            gatewayConnectionStatus = error.message ?: "NOVA Central Server unavailable · will retry when opened"
+        }
+    }
     var voiceStatus by remember { mutableStateOf("") }
     var queuedSpeakText by remember { mutableStateOf<String?>(null) }
     var messagePlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    DisposableEffect(context) { onDispose { speechEngine?.stop(); speechEngine?.shutdown(); messagePlayer?.stop(); messagePlayer?.release() } }
-    val speakOnDevice: (String) -> Unit = { text ->
-        if (speechEngine != null && !speechInitializing) {
-            speechEngine?.stop()
-            speechEngine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nova-assistant-response")
-            voiceStatus = "Speaking with the device's configured speech engine."
-        } else if (!speechInitializing) {
-            pendingSpeech = text
-            speechInitializing = true
-            speechEngine = TextToSpeech(context) { result ->
-                speechInitializing = false
-                if (result == TextToSpeech.SUCCESS) {
-                    val languageResult = speechEngine?.setLanguage(Locale.getDefault())
-                    if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        voiceStatus = "The device speech engine does not support the current language."
-                        pendingSpeech = null
-                    } else {
-                        pendingSpeech?.let { speechEngine?.speak(it, TextToSpeech.QUEUE_FLUSH, null, "nova-assistant-response") }
-                        pendingSpeech = null
-                        voiceStatus = "Speaking with the device's configured speech engine."
-                    }
-                } else {
-                    pendingSpeech = null
-                    voiceStatus = "Device text-to-speech could not initialize."
-                }
-            }
-        } else {
-            pendingSpeech = text
-        }
-    }
+    DisposableEffect(context) { onDispose { messagePlayer?.stop(); messagePlayer?.release() } }
     var section by remember { mutableStateOf(Section.HQ) }
     var base by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
     var reduceMotion by remember { mutableStateOf(settings.get("reduce_motion", "false") == "true") }
-    var backendStatus by remember { mutableStateOf("AI services connect through NOVA-GATEWAY") }
+    var backendStatus by remember { mutableStateOf("NOVA Central Server · automatic installation") }
     var backendBusy by remember { mutableStateOf(false) }
     var showNavigation by remember { mutableStateOf(false) }
     var assistantExpanded by remember { mutableStateOf(false) }
@@ -181,7 +156,7 @@ private fun NovaApp(settings: SecureSettings) {
     var agentChatStatus by remember { mutableStateOf("") }
     var agentChatBusy by remember { mutableStateOf(false) }
     var workforceBusy by remember { mutableStateOf(false) }
-    var workforceNotice by remember { mutableStateOf("Connect a backend to load saved agent/task records.") }
+    var workforceNotice by remember { mutableStateOf("Live office roster requires a documented Gateway-to-character mapping.") }
     var usageSummary by remember { mutableStateOf("Usage summary not loaded") }
     var newTaskTitle by remember { mutableStateOf("") }
     var newTaskDescription by remember { mutableStateOf("") }
@@ -198,38 +173,40 @@ private fun NovaApp(settings: SecureSettings) {
     var selectedCharacterKey by remember { mutableStateOf("head") }
     val chat = remember { mutableStateListOf<ChatLine>() }
     var draft by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Sign in to NOVA-GATEWAY to message Head.") }
+    var status by remember { mutableStateOf("NOVA-GATEWAY selects and serves Head's assigned model.") }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
-        // Remove superseded legacy API credentials; only the gateway JWT triple is retained.
-        settings.put("base", "")
-        settings.put("token", "")
+        // Remove obsolete user-login JWTs and legacy NOVA backend credentials from earlier app builds.
+        listOf("base", "token", "gateway_access_token", "gateway_refresh_token", "gateway_workspace_id").forEach { settings.put(it, "") }
     }
     val speakResponse: (String) -> Unit = { text ->
-        speechEngine?.stop(); messagePlayer?.stop()
+        messagePlayer?.stop()
         queuedSpeakText = text
     }
-    val stopSpeech: () -> Unit = { queuedSpeakText = null; speechEngine?.stop(); messagePlayer?.stop(); voiceStatus = "Speech playback stopped." }
-    LaunchedEffect(queuedSpeakText, base, token) {
+    val stopSpeech: () -> Unit = { queuedSpeakText = null; messagePlayer?.stop(); voiceStatus = "Speech playback stopped." }
+    LaunchedEffect(queuedSpeakText, gatewaySession?.workspaceId) {
         val message = queuedSpeakText ?: return@LaunchedEffect
-        if (base.isBlank() || token.isBlank()) { queuedSpeakText = null; speakOnDevice(message); return@LaunchedEffect }
-        voiceStatus = "Requesting Head voice for this actual assistant message…"
+        voiceStatus = "Requesting NOVA-GATEWAY voice for this assistant response…"
         try {
-            val audio = withContext(Dispatchers.IO) { synthesizeHeadMessage(base, token, message) }
-            val file = withContext(Dispatchers.IO) { java.io.File(context.cacheDir, "nova-head-message.mp3").apply { writeBytes(audio) } }
-            messagePlayer?.stop(); messagePlayer?.release()
-            messagePlayer = MediaPlayer().apply {
-                setDataSource(file.absolutePath)
-                setOnCompletionListener { voiceStatus = "Head finished speaking this assistant message." }
-                setOnErrorListener { _, _, _ -> voiceStatus = "Head audio playback failed; the message remains available as text."; true }
-                setOnPreparedListener { it.start(); voiceStatus = "Head is speaking this assistant message." }
-                prepareAsync()
+            val audio = withContext(Dispatchers.IO) { gatewayClient.speak(message) }
+            if (audio == null) {
+                voiceStatus = "Gateway voice unavailable; the assistant response remains available as text."
+            } else {
+                val extension = if (audio.contentType.contains("ogg", true)) "ogg" else "mp3"
+                val file = withContext(Dispatchers.IO) { java.io.File(context.cacheDir, "nova-head-message.$extension").apply { writeBytes(audio.bytes) } }
+                messagePlayer?.stop(); messagePlayer?.release()
+                messagePlayer = MediaPlayer().apply {
+                    setDataSource(file.absolutePath)
+                    setOnCompletionListener { voiceStatus = "Head finished speaking this assistant response." }
+                    setOnErrorListener { _, _, _ -> voiceStatus = "Gateway audio playback failed; the response remains available as text."; true }
+                    setOnPreparedListener { it.start(); voiceStatus = "Head is speaking with NOVA-GATEWAY voice." }
+                    prepareAsync()
+                }
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            voiceStatus = "Head voice is unavailable; using device TTS for this actual assistant message."
-            speakOnDevice(message)
+            voiceStatus = "Gateway voice unavailable; the assistant response remains available as text."
         } finally {
             if (queuedSpeakText == message) queuedSpeakText = null
         }
@@ -269,7 +246,6 @@ private fun NovaApp(settings: SecureSettings) {
                 var completedResponse: String? = null
                 val collector = launch { for (chunk in chunks) { assistantResponding = true; if (answerIndex < chat.size) chat[answerIndex] = ChatLine(chat[answerIndex].text + chunk, false) } }
                 try {
-                    if (gatewayClient.session() == null) throw IOException("Sign in to NOVA-GATEWAY from the navigation drawer before sending AI requests.")
                     val response = withContext(Dispatchers.IO) { gatewayHeadOrchestrate(gatewayClient, text) }
                     chunks.trySend(response)
                     completedResponse = response
@@ -299,7 +275,7 @@ private fun NovaApp(settings: SecureSettings) {
     }
     val refreshWorkforce: () -> Unit = {
         if (base.isBlank() || token.isBlank()) {
-            workforceNotice = "Sign in to NOVA-GATEWAY for live Head, worker, task, memory, and activity data."
+            workforceNotice = "The supplied Gateway API exposes tasks, messages, memory and activity, but not the legacy office/character roster contract."
         } else if (!workforceBusy) {
             workforceBusy = true
             scope.launch {
@@ -382,7 +358,7 @@ private fun NovaApp(settings: SecureSettings) {
     }
     LaunchedEffect(selectedOfficeAgent?.id) {
         agentChatLines.clear(); agentChatDraft = ""
-        agentChatStatus = if (gatewayClient.session() == null) "Sign in to NOVA-GATEWAY to chat with this worker." else "Worker prompts are routed to NOVA-GATEWAY."
+        agentChatStatus = "Worker prompts and assigned model are resolved by NOVA-GATEWAY permissions."
     }
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -421,7 +397,7 @@ private fun NovaApp(settings: SecureSettings) {
                         }
                     }
                     LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (chat.isEmpty()) item { EmptyState("Ready when you are", "Messages route through NOVA-GATEWAY. Sign in from the Gateway tab; offline responses are never fabricated.") }
+                        if (chat.isEmpty()) item { EmptyState("Ready when you are", "Messages route through NOVA-GATEWAY using this device's encrypted installation. The Gateway selects the assigned Head model; offline responses are never fabricated.") }
                         items(chat) { line -> ChatBubble(line, speakResponse) }
                         if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                     }
@@ -430,7 +406,7 @@ private fun NovaApp(settings: SecureSettings) {
                         Spacer(Modifier.width(8.dp)); IconButton(enabled = !busy && draft.isNotBlank(), onClick = sendAssistantMessage) { Icon(Icons.Default.Send, "Send message") }
                     }
                 }
-                Section.HOME -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Good day", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 24.dp)); Text("Your workspace is ready. Connect a backend to enable cloud-backed features."); DashboardCard("Assistant", "Start a conversation", Icons.Default.Chat) { section = Section.ASSISTANT }; DashboardCard("NOVA-GATEWAY", gatewaySession?.let { "Workspace ${it.workspaceId}" } ?: "Sign in or register", Icons.Default.Cloud) { section = Section.GATEWAY } }
+                Section.HOME -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text("Good day", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 24.dp)); Text(gatewayConnectionStatus); DashboardCard("Assistant", "Start a conversation", Icons.Default.Chat) { section = Section.ASSISTANT }; DashboardCard("NOVA Central Server", gatewaySession?.let { "Connected · workspace ${it.workspaceId}" } ?: "Connecting automatically…", Icons.Default.Cloud) { section = Section.GATEWAY } }
                 Section.HQ -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -466,7 +442,6 @@ private fun NovaApp(settings: SecureSettings) {
                 )
                 Section.TASKS -> GatewayProjectsScreen(
                     client = gatewayClient,
-                    onOpenGateway = { section = Section.GATEWAY },
                     modifier = Modifier.fillMaxSize(),
                 )
                 Section.MEETINGS -> Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
@@ -546,17 +521,17 @@ private fun NovaApp(settings: SecureSettings) {
                 Section.GATEWAY -> GatewayWorkspaceScreen(gatewayClient, Modifier.fillMaxSize(), onSessionChanged = { gatewaySession = it })
                 Section.SETTINGS -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 12.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("Settings center", style = MaterialTheme.typography.headlineSmall)
-                    SettingsCategory("NOVA-GATEWAY account", gatewaySession?.let { "Workspace ${it.workspaceId} · JWTs encrypted with Android Keystore" } ?: "Not signed in · AI features require NOVA-GATEWAY login", "Open gateway") { section = Section.GATEWAY }
-                    SettingsCategory("Gateway session", gatewaySession?.let { "Workspace ${it.workspaceId} · secure JWT session" } ?: "Authentication required", "Sign in / manage") { section = Section.GATEWAY }
+                    SettingsCategory("NOVA Central Server", gatewaySession?.let { "Workspace ${it.workspaceId} · installation token protected by Android Keystore" } ?: gatewayConnectionStatus, "Connection details") { section = Section.GATEWAY }
+                    SettingsCategory("Device installation", gatewaySession?.let { "Installation ${it.installationId} · expires ${it.expiresAt}" } ?: "Registering this device automatically", "Refresh status") { section = Section.GATEWAY }
                     SettingsCategory("AI providers & gateways", "Gateway registration, model discovery, verified pools, and routing are managed only by NOVA-GATEWAY.", "Open NOVA-GATEWAY") { section = Section.GATEWAY }
-                    SettingsCategory("Head & workers", "${gatewaySession?.workspaceId?.let { "Gateway workspace $it" } ?: "Sign in to load gateway workers"} · assignments and chat route through NOVA-GATEWAY", "Open gateway workers") { section = Section.GATEWAY }
+                    SettingsCategory("Head & workers", "${gatewaySession?.workspaceId?.let { "Gateway workspace $it" } ?: "Waiting for device installation"} · assignments, model routing, and permissions are resolved by NOVA-GATEWAY", "Open Gateway data") { section = Section.GATEWAY }
                     SettingsCategory("Character profiles", "NOVA-GATEWAY's supplied API contract does not expose character appearance/personality endpoints, so profile editing cannot sync to this gateway yet.")
                     SettingsCategory("Model pools & routing", "Head Claude-family pool and verified non-Claude worker pool are loaded from NOVA-GATEWAY.", "Manage in gateway") { section = Section.GATEWAY }
                     SettingsCategory("External integrations", "Gateway registration is handled in NOVA-GATEWAY. GitHub, IDEs, OAuth integrations, and external actions are not connected by this build.", "Gateway integrations") { section = Section.INTEGRATIONS }
                     SettingsCategory("Memory & data", "Workspace memory and shared/personal records are managed by NOVA-GATEWAY.", "Manage memory") { section = Section.GATEWAY }
                     SettingsCategory("Notifications", "Push notifications are not implemented; NOVA does not claim background notification delivery.")
                     Card { Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Appearance & animations", style = MaterialTheme.typography.titleSmall); Text("OLED-friendly palette · ${if (reduceMotion) "reduced motion" else "ambient office animation"}", style = MaterialTheme.typography.bodySmall) }; Switch(checked = reduceMotion, onCheckedChange = { reduceMotion = it; settings.put("reduce_motion", it.toString()) }) } }
-                    SettingsCategory("Security & permissions", "Gateway access token, refresh token, and workspace ID are encrypted with Android Keystore. Provider API keys are sent only to NOVA-GATEWAY over HTTPS and are not persisted by this app.")
+                    SettingsCategory("Security & permissions", "This app stores only a device ID and NOVA-GATEWAY installation/workspace credentials encrypted with Android Keystore. It never asks for user login or provider keys; model access is permission-checked by NOVA-GATEWAY.")
                     SettingsCategory("Advanced configuration", "$usageSummary\n$analyticsNote")
                 }
             }
@@ -856,7 +831,7 @@ catch (_: Exception) { assistantListening = false; voiceStatus = "Speech recogni
                 Text(agentChatStatus, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(value = agentChatDraft, onValueChange = { agentChatDraft = it }, modifier = Modifier.weight(1f), label = { Text("Message ${agent.name}") }, enabled = !agentChatBusy, maxLines = 3)
-                    IconButton(enabled = !agentChatBusy && agentChatDraft.isNotBlank() && token.isNotBlank(), onClick = {
+                    IconButton(enabled = !agentChatBusy && agentChatDraft.isNotBlank(), onClick = {
                         val prompt = agentChatDraft.trim()
                         agentChatDraft = ""
                         agentChatLines.add(ChatLine(prompt, true))
@@ -864,10 +839,9 @@ catch (_: Exception) { assistantListening = false; voiceStatus = "Speech recogni
                         agentChatStatus = "Waiting for NOVA-GATEWAY worker routing…"
                         scope.launch {
                             try {
-                                if (gatewayClient.session() == null) throw IOException("Sign in to NOVA-GATEWAY before chatting with a worker.")
                                 val result = withContext(Dispatchers.IO) {
-                                    val gatewayWorker = gatewayWorkerId(gatewayClient, agent.identity, agent.id)
-                                    AgentChatReply(gatewayWorkerChat(gatewayClient, gatewayWorker, prompt))
+                                    val gatewayAgent = gatewayAgentKey(agent.identity)
+                                    AgentChatReply(gatewayWorkerChat(gatewayClient, gatewayAgent, prompt))
                                 }
                                 if (selectedOfficeAgent?.id == agent.id) {
                                     agentChatLines.add(ChatLine(result.response, false))
