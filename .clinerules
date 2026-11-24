@@ -1,0 +1,2 @@
+# NOVA engineering rules
+Read `AGENTS.md` and the relevant `skills/**/SKILL.md` before implementation. Avoid claims unsupported by code and tests. Never commit secrets or execute user-provided shell commands on the API host. Add tests and update docs with behavior changes. Keep provider keys server-side, use least-privilege scopes, and redact secrets from errors. Tasks in this initial build are durable records/checkpoints, not an autonomous execution worker. Android build/test claims require a successful Gradle run. Do not add unreviewed generated skills or connectors.

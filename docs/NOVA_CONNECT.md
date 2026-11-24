@@ -1,0 +1,3 @@
+# NOVA Connect status
+
+No connector engine/MCP client or OAuth flow is implemented. MCP is the proposed extensible protocol, not a currently available connection feature. Before enabling a server, review official [MCP SDK](https://modelcontextprotocol.io/docs/sdk) and security guidance; discover and test each tool separately, enforce per-agent scopes, treat results as untrusted instructions, keep credentials isolated, and provide revocation and per-action approval. Do not promise arbitrary app compatibility. The official [MCP Apps overview](https://modelcontextprotocol.io/extensions/apps/overview) describes optional sandboxed interactive UI resources; it does not replace backend connector auth.

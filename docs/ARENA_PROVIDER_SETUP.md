@@ -1,0 +1,7 @@
+# Arena provider setup
+
+> **Backend operator/legacy instructions only.** The current Android app uses automatic device installation with NOVA Central Server. Regular users do not enter Arena or other provider keys in NOVA; do not follow the historical Android key-entry steps below.
+
+Verified from Arena official API docs on 2026-11-22: OpenAI-compatible base URL `https://api.arena.ai/v1`; bearer authentication; Chat Completions `POST /v1/chat/completions`; model listing `GET /v1/models`; docs list router model `coding-router-preview`. See the comprehensive [API Setup Guide](API_SETUP_GUIDE.md) and official [API](https://platform.arena.ai/docs/api), [Quickstart](https://platform.arena.ai/docs/quickstart), and [error codes](https://platform.arena.ai/docs/errors).
+
+Create a key through the official Arena dashboard. Either set `NOVA_PROVIDER_API_KEY` as a backend-only secret and configure `NOVA_MODEL`, or configure the backend encryption key and paste the Arena key under **Assistant → AI provider** in Android (NOVA key needs `providers:read` and `providers:write`). Choose an exact model ID and use Test to fetch model IDs from the provider. The provider key is transmitted over HTTPS and encrypted in backend storage, not saved in the APK. The adapter returns clear 402/429/auth/network failures. Arena API usage consumes provider account quota/balance. It does not supply automatic fallback; NOVA does not claim unlimited use.
