@@ -79,8 +79,8 @@ internal fun CharacterRosterScreen(
                 val task = agent?.let { assignedTaskFor(it, tasks) }
                 val liveStatus = when {
                     agent == null -> "Awaiting backend"
-                    task?.state == "RUNNING" -> "Working · ${task.title}"
-                    task?.state in setOf("PLANNING", "ASSIGNED") -> "Planning · ${task.title}"
+                    task != null && task.state == "RUNNING" -> "Working · ${task.title}"
+                    task != null && task.state in setOf("PLANNING", "ASSIGNED") -> "Planning · ${task.title}"
                     else -> agent.status
                 }
                 val model = agent?.let { verifiedModelIdentity(it, emptyList()) }
