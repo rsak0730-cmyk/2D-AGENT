@@ -25,13 +25,17 @@ def test_example_environment_contains_no_live_provider_or_gateway_credentials():
             assert value == "" or value.startswith("replace-with-") or value == "gateway.example.org"
 
 
-def test_android_sends_provider_key_only_to_gateway_without_persisting_it():
+def test_android_uses_zero_login_device_installation_and_never_collects_provider_keys():
     source = (ROOT / "app/src/main/java/ai/nova/app/MainActivity.kt").read_text()
     gateway = (ROOT / "app/src/main/java/ai/nova/app/GatewayApi.kt").read_text()
-    assert "saveProviderConfiguration" not in source
-    assert 'client.request("/v1/gateways", "POST", payload)' in gateway
-    assert '.put("api_key", oneShotKey)' in gateway
-    assert 'providerKey = ""' in gateway
-    assert 'secure.put("provider_api_key"' not in gateway
-    assert 'settings.put("provider_api_key"' not in source
-    assert "GatewayClient" in source and "gatewayHeadOrchestrate" in source
+    projects = (ROOT / "app/src/main/java/ai/nova/app/GatewayProjects.kt").read_text()
+    assert '"/v1/installations/register"' in gateway
+    assert '"/v1/installations/refresh"' in gateway
+    assert '"X-Workspace-Id"' in gateway and '"X-Installation-Token"' in gateway
+    assert '"/v1/auth/login"' not in gateway and '"/v1/auth/register"' not in gateway
+    assert '"/v1/gateways"' not in gateway
+    assert '.put("api_key"' not in gateway
+    assert "OutlinedTextField(providerKey" not in gateway
+    assert "Sign in" not in source and "Sign in" not in projects
+    assert "gatewayHeadOrchestrate" in source and '"/v1/chat/completions"' in gateway
+    assert 'secure.put(KEY_INSTALLATION_TOKEN' in gateway
