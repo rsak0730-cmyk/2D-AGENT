@@ -193,7 +193,7 @@ internal fun gatewayHeadOrchestrate(client: GatewayClient, prompt: String): Stri
     for (key in listOf("response", "message", "output", "content", "result")) {
         val value = json.opt(key)
         if (value is String && value.isNotBlank()) return value
-        if (value is JSONObject || value is JSONArray) return value.toString(2)
+        if (value is JSONObject || value is JSONArray) return value.toString()
     }
     return json.toString(2)
 }
@@ -236,7 +236,7 @@ internal fun gatewayWorkerChat(client: GatewayClient, workerId: String, message:
     for (key in listOf("response", "message", "output", "content", "reply")) {
         val value = json.opt(key)
         if (value is String && value.isNotBlank()) return value
-        if (value is JSONObject || value is JSONArray) return value.toString(2)
+        if (value is JSONObject || value is JSONArray) return value.toString()
     }
     return json.toString(2)
 }
