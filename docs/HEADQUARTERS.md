@@ -17,5 +17,5 @@ The NOVA-GATEWAY Android contract used for AI/workspace requests has Head, worke
 ## Verification
 
 - Backend tests cover the canonical character order, voice-gender balance, isolation and safe upgrade of untouched legacy defaults.
-- Android preview builds and APK artifacts are produced by `.github/workflows/android-debug.yml`.
-- A successful compile is necessary but does not verify the external gateway's live response schema, reference-image fidelity, floor movement, or model provenance.
+- GitHub Actions Android Debug APK run `45430705564` passed tests, lint, debug APK assembly, and APK verification on commit `de449349d38fcaea528db4f1fe15c71a467cea87`; it uploaded the `nova-debug-apk` artifact. The build log and artifact are available from https://github.com/rsak0730-cmyk/2D-AGENT/actions/runs/45430705564.
+- Backend validation also passed on that commit (run `45430730840`). A successful compile does not verify the external gateway's live response schema, reference-image fidelity, floor movement, or model provenance.
