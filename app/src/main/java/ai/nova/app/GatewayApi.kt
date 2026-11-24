@@ -201,7 +201,7 @@ internal class GatewayClient(private val secure: SecureSettings) {
         repeat(2) { attempt ->
             rawRequest(path, body.toString(), credentials, "POST").use { response ->
                 val contentType = response.header("Content-Type").orEmpty()
-                val bytes = response.body?.bytes().orEmpty()
+                val bytes = response.body?.bytes() ?: byteArrayOf()
                 if (response.code == 401 && attempt == 0) {
                     val renewed = try { refreshInstallation(credentials) } catch (_: Exception) { return null }
                     return requestAudio(path, body, renewed, retry = false)
@@ -216,7 +216,7 @@ internal class GatewayClient(private val secure: SecureSettings) {
     private fun requestAudio(path: String, body: JSONObject, credentials: GatewaySession, retry: Boolean): GatewayAudio? {
         rawRequest(path, body.toString(), credentials, "POST").use { response ->
             val contentType = response.header("Content-Type").orEmpty()
-            val bytes = response.body?.bytes().orEmpty()
+            val bytes = response.body?.bytes() ?: byteArrayOf()
             if (response.code == 401 && retry) {
                 val renewed = try { refreshInstallation(credentials) } catch (_: Exception) { return null }
                 return requestAudio(path, body, renewed, retry = false)
