@@ -26,23 +26,23 @@ router = APIRouter()
 # Intentional, non-stereotyped fictional personas. Exactly five female and five male
 # workers; gender is identity metadata, not a personality or role constraint.
 WORKER_DEFAULTS = {
-    "android": ("Mira Sen", "female", "Patient systems thinker who tests edge cases before proposing a design.", "Android and Kotlin implementation; Compose architecture and lifecycle.", "Methodical, concise, and explicit about trade-offs.", "Indigo field jacket; modular slate toolkit; short dark curls."),
-    "web": ("Arin Bose", "male", "Curious prototyper who values evidence and fast feedback.", "Web frontend and platform engineering.", "Direct, exploratory, and comfortable revising a hypothesis.", "Teal overshirt; compact camera; round glasses."),
-    "game": ("Devika Roy", "female", "Playful systems designer who balances emergent behavior with clear rules.", "Game systems and interactive simulations.", "Vivid examples followed by crisp mechanics.", "Copper bomber jacket; pixel-pattern notebook; undercut."),
-    "ui-ux": ("Ishan Dutta", "male", "Attentive listener who makes accessibility a design input from the start.", "Accessible product experience and visual systems.", "Thoughtful, user-centered, and concrete.", "Soft gray sweater; bright orange sketchbook; wavy hair."),
-    "backend": ("Leena Ghosh", "female", "Pragmatic investigator who prefers small, observable interfaces.", "APIs, backend services, and integration boundaries.", "Structured, precise, and clear about operational risks.", "Forest-green utility vest; brass key charm; long braid."),
-    "database": ("Kabir Mitra", "male", "Careful optimizer who treats data lifecycle and recoverability as first-class concerns.", "Schema design, SQL, and data lifecycle.", "Measured, analytical, and uses small examples.", "Navy shirt; silver data-map pin; close-cropped hair."),
-    "security": ("Nandita Das", "female", "Adversarially curious reviewer who turns threat findings into practical mitigations.", "Security review, trust boundaries, and threat modeling.", "Calm, specific, and severity-aware.", "Burgundy blazer; geometric badge; shoulder-length hair."),
-    "qa": ("Omar Ali", "male", "Experimentalist who finds the smallest reliable test that catches a real failure.", "Test strategy, quality plans, and regression analysis.", "Question-led, evidence-based, and reproducible.", "Mustard hoodie; pocket test cards; square glasses."),
-    "research": ("Tara Chatterjee", "female", "Skeptical synthesizer who separates verified facts from open questions.", "Research, source verification, and evidence synthesis.", "Citation-minded, balanced, and transparent about uncertainty.", "Cobalt scarf; annotated tablet; loose curls."),
-    "documentation": ("Rafiq Khan", "male", "Clear-minded editor who makes complex procedures approachable without losing precision.", "Technical documentation and information architecture.", "Plain-language, orderly, and audience-aware.", "Cream overshirt; red pencil; neatly combed hair."),
+    "android": ('Aiden', 'male', 'Practical and patient; explains implementation trade-offs clearly.', 'Software development and engineering delivery.', 'Methodical, concise, and explicit about trade-offs.', 'Developer character design; final visual reference asset is supplied separately.'),
+    "web": ('Zen', 'male', 'Calm and exploratory; prefers small experiments and useful feedback.', 'Web engineering and frontend systems.', 'Direct, exploratory, and comfortable revising a hypothesis.', 'Web developer character design; final visual reference asset is supplied separately.'),
+    "game": ('Rex', 'male', 'Imaginative and playful; turns concepts into coherent visual ideas.', 'Creative direction and interactive concepts.', 'Vivid examples followed by crisp mechanics.', 'Creative artist character design; final visual reference asset is supplied separately.'),
+    "ui-ux": ('Luna', 'female', 'Observant and empathetic; makes clarity and accessibility part of the design.', 'Visual systems and user experience.', 'Thoughtful, user-centered, and concrete.', 'Designer character design; final visual reference asset is supplied separately.'),
+    "backend": ('Aron', 'male', 'Structured and curious; favors explainable evidence over confident guesses.', 'Data science and backend analysis.', 'Structured, precise, and clear about operational risks.', 'Data scientist character design; final visual reference asset is supplied separately.'),
+    "database": ('Riya', 'female', 'Measured and analytical; makes assumptions and data limitations explicit.', 'Data analysis, schemas, and information quality.', 'Measured, analytical, and uses small examples.', 'Analyst character design; final visual reference asset is supplied separately.'),
+    "security": ('Sia', 'female', 'Steady and threat-aware; focuses on practical, proportionate mitigations.', 'Security review and trust boundaries.', 'Calm, specific, and severity-aware.', 'Security expert character design; final visual reference asset is supplied separately.'),
+    "qa": ('Kian', 'male', 'Methodical and inquisitive; turns edge cases into reproducible checks.', 'Testing strategy and quality assurance.', 'Question-led, evidence-based, and reproducible.', 'Tester character design; final visual reference asset is supplied separately.'),
+    "research": ('Mira', 'female', 'Curious and evidence-minded; separates verified findings from open questions.', 'Research, source review, and synthesis.', 'Citation-minded, balanced, and transparent about uncertainty.', 'Researcher character design; final visual reference asset is supplied separately.'),
+    "documentation": ('Evelyn', 'female', 'Clear and thoughtful; makes complex procedures approachable.', 'Documentation and information architecture.', 'Plain-language, orderly, and audience-aware.', 'Documentalist character design; final visual reference asset is supplied separately.'),
 }
 HEAD_DEFAULT = {
-    "name": "Astra Vale", "gender_identity": "female", "age": 17,
-    "personality": "Sweet, friendly, thoughtful, and respectful. Astra listens carefully, asks focused questions, is candid about uncertainty, and helps the team feel welcome without pretending to be human.",
+    "name": "Nova", "gender_identity": "female", "age": None,
+    "personality": "Warm, composed, and candid. Nova listens carefully, asks focused questions, and coordinates the team without overstating certainty.",
     "specialization": "Headquarters leadership, goal clarification, delegation, and synthesis.",
     "communication_style": "Warm, natural conversation; concise by default, with supportive context when complexity warrants it.",
-    "appearance": {"description": "Fictional 17-year-old girl with a gentle heart-shaped face, bright hazel eyes, long dark wavy hair with a silver star clip, and a midnight-blue high-collar jacket with a star-map lining. Youthful and friendly, rendered in modest pixel-art workwear.", "face_shape": "heart", "eye_color": "#73543A", "skin_color": "#E6B998", "hair_style": "long_waves", "hair_color": "#2B2636", "body_type": "slim", "clothing": "midnight-blue high-collar jacket", "clothing_color": "#344A7A", "accent_color": "#E1C47B", "accessory": "silver star hair clip"},
+    "appearance": {"description": "Nova, Head and Leader. Match the approved character roster artwork; the reference image must be added to the Android assets before claiming an exact likeness.", "face_shape": "heart", "eye_color": "#73543A", "skin_color": "#E6B998", "hair_style": "long_waves", "hair_color": "#2B2636", "body_type": "slim", "clothing": "midnight-blue high-collar jacket", "clothing_color": "#344A7A", "accent_color": "#E1C47B", "accessory": "silver star hair clip"},
 }
 WORKER_APPEARANCE = {
     "android": {"face_shape":"oval","eye_color":"#594333","skin_color":"#E6B895","hair_style":"short_curls","hair_color":"#2E2524","body_type":"compact","clothing":"indigo field jacket","clothing_color":"#527ED3","accent_color":"#8AD8FF","accessory":"slate toolkit strap"},
@@ -57,6 +57,11 @@ WORKER_APPEARANCE = {
     "documentation": {"face_shape":"long","eye_color":"#3B2C24","skin_color":"#B98061","hair_style":"neat_swept","hair_color":"#241E1E","body_type":"tall","clothing":"cream documentation overshirt","clothing_color":"#C1A982","accent_color":"#D75F56","accessory":"red pencil"},
 }
 DEFAULT_SETTINGS = {"speed": 0.96, "stability": 0.55, "style": 0.25, "similarity_boost": 0.75}
+LEGACY_PROFILE_NAMES = {
+    "head": "Astra Vale", "android": "Mira Sen", "web": "Arin Bose", "game": "Devika Roy",
+    "ui-ux": "Ishan Dutta", "backend": "Leena Ghosh", "database": "Kabir Mitra",
+    "security": "Nandita Das", "qa": "Omar Ali", "research": "Tara Chatterjee", "documentation": "Rafiq Khan",
+}
 
 
 def _ensure_profiles(db: Session, owner: ApiKey) -> None:
@@ -93,9 +98,18 @@ def _ensure_profiles(db: Session, owner: ApiKey) -> None:
                 communication_style=info["communication_style"], appearance=info["appearance"],
                 voice_settings=dict(DEFAULT_SETTINGS)))
             changed = True
-        elif row.agent_id != (agent.id if agent else None):
-            row.agent_id = agent.id if agent else None
-            changed = True
+        else:
+            if row.agent_id != (agent.id if agent else None):
+                row.agent_id = agent.id if agent else None
+                changed = True
+            # Rename only an untouched built-in default; preserve any user-customized name.
+            if row.name == LEGACY_PROFILE_NAMES.get(key) and row.name != info["name"]:
+                row.name = info["name"]
+                row.gender_identity = info["gender_identity"]
+                changed = True
+            if key == "head" and row.age == 17 and row.name == info["name"]:
+                row.age = None
+                changed = True
     if changed:
         db.commit()
 
@@ -174,7 +188,7 @@ def list_characters(db: Session = Depends(get_db), key: ApiKey = Depends(require
     _ensure_profiles(db, key)
     rows = db.query(CharacterProfile).filter(CharacterProfile.owner_key_id == key.id).all()
     by_key = {r.character_key: r for r in rows}
-    known_order = ["head", *WORKER_DEFAULTS.keys()]
+    known_order = ["head", "android", "research", "ui-ux", "web", "database", "qa", "security", "backend", "documentation", "game"]
     ordered = [by_key[k] for k in known_order if k in by_key]
     ordered.extend(by_key[k] for k in sorted(by_key) if k not in set(known_order))
     return [_profile_view(row, db.get(Agent, row.agent_id) if row.agent_id else None) for row in ordered]

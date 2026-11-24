@@ -100,17 +100,17 @@ async def run_worker_tool_requests(db, owner, agent, task, instructions, initial
 @router.post("/api/v1/agents/seed", response_model=list[AgentView])
 def seed_roster(db: Session = Depends(get_db), key: ApiKey = Depends(require_scope("agents:write"))):
     roles = [
-        ("manager", "Head Manager", "Plans, delegates, reviews worker outputs, and makes final decisions.", ["planning", "delegation", "quality"]),
-        ("android", "Android Developer", "Works on Android and Kotlin application tasks.", ["android", "kotlin", "compose"]),
-        ("web", "Web Developer", "Works on web frontend and web platform tasks.", ["web", "frontend"]),
-        ("game", "Game Developer", "Works on game systems and interactive simulations.", ["game", "simulation"]),
-        ("ui-ux", "UI/UX Designer", "Designs accessible user experiences and visual systems.", ["design", "accessibility"]),
-        ("backend", "Backend Developer", "Works on APIs and backend services.", ["backend", "api"]),
-        ("database", "Database Engineer", "Works on database schema, queries, and data lifecycle.", ["database", "sql"]),
-        ("security", "Security Engineer", "Reviews trust boundaries, secrets, and threat mitigations.", ["security", "threat-model"]),
-        ("qa", "QA Engineer", "Creates and evaluates tests and quality plans.", ["qa", "testing"]),
-        ("research", "Research Analyst", "Researches and verifies relevant evidence.", ["research", "verification"]),
-        ("documentation", "Documentation Writer", "Writes and maintains technical documentation.", ["documentation", "technical-writing"]),
+        ("manager", "Head · Leader", "Coordinates the headquarters, clarifies goals, delegates, reviews outputs, and synthesizes decisions.", ["planning", "delegation", "quality"]),
+        ("android", "Developer", "Handles software development and engineering delivery.", ["development", "engineering"]),
+        ("web", "Web Developer", "Works on web engineering and frontend systems.", ["web", "frontend"]),
+        ("game", "Creative Artist", "Develops creative direction and interactive concepts.", ["creative", "art"]),
+        ("ui-ux", "Designer", "Designs visual systems and user experiences.", ["design", "accessibility"]),
+        ("backend", "Data Scientist", "Works on data science and backend analysis.", ["data-science", "analysis"]),
+        ("database", "Analyst", "Analyzes data, schemas, and information quality.", ["analysis", "data-quality"]),
+        ("security", "Security Expert", "Reviews security boundaries and practical mitigations.", ["security", "threat-model"]),
+        ("qa", "Tester", "Creates and evaluates tests and quality plans.", ["qa", "testing"]),
+        ("research", "Researcher", "Researches and verifies relevant evidence.", ["research", "verification"]),
+        ("documentation", "Documentalist", "Writes and maintains documentation and information architecture.", ["documentation", "technical-writing"]),
     ]
     known = {a.identity for a in db.query(Agent).filter(Agent.owner_key_id == key.id).all()}
     for index, (identity, title, instructions, specialties) in enumerate(roles):

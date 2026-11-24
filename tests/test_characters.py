@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 
 from backend.nova_api import characters
-from backend.nova_api.models import AgentMemory, ApiKey
+from backend.nova_api.models import AgentMemory, ApiKey, CharacterProfile
 from backend.nova_api.auth import digest
 from backend.nova_api.characters import head_system_context
 from conftest import TestingSession, auth_key, client
@@ -17,22 +17,43 @@ def test_character_roster_has_distinct_head_and_five_five_persistent_workers():
     profiles = first.json()
     assert len(profiles) == 11
     assert profiles[0]["character_key"] == "head"
-    assert profiles[0]["name"] == "Astra Vale"
-    assert profiles[0]["gender_identity"] == "female" and profiles[0]["age"] == 17
-    assert profiles[0]["appearance"]["description"].startswith("Fictional 17-year-old girl")
+    assert profiles[0]["name"] == "Nova"
+    assert profiles[0]["gender_identity"] == "female" and profiles[0]["age"] is None
+    assert profiles[0]["appearance"]["description"].startswith("Nova, Head and Leader")
     workers = profiles[1:]
     assert len(workers) == 10
     assert sum(row["gender_identity"] == "female" for row in workers) == 5
     assert sum(row["gender_identity"] == "male" for row in workers) == 5
-    assert len({row["name"] for row in profiles}) == 11
+    assert [row["name"] for row in profiles] == ["Nova", "Aiden", "Mira", "Luna", "Zen", "Riya", "Kian", "Sia", "Aron", "Evelyn", "Rex"]
     assert len({row["personality"] for row in workers}) == 10
     again = client.get("/api/v1/characters", headers=owner).json()
     assert [row["character_key"] for row in profiles] == [row["character_key"] for row in again]
     outsider = auth_key(["agents:read"])
     outsider_profiles = client.get("/api/v1/characters", headers=outsider).json()
     assert [row["character_key"] for row in outsider_profiles] == ["head"]
-    assert outsider_profiles[0]["name"] == "Astra Vale"
+    assert outsider_profiles[0]["name"] == "Nova"
     assert outsider_profiles[0]["voice_id"] is None
+
+
+def test_canonical_roster_renames_only_untouched_legacy_defaults():
+    owner = auth_key(["agents:read", "agents:write"])
+    client.post("/api/v1/agents/seed", headers=owner)
+    client.get("/api/v1/characters", headers=owner)
+    db = TestingSession()
+    token = owner["Authorization"].split(" ", 1)[1]
+    owner_id = db.query(ApiKey).filter(ApiKey.key_hash == digest(token)).one().id
+    aiden = db.query(CharacterProfile).filter_by(owner_key_id=owner_id, character_key="android").one()
+    aiden.name = "Mira Sen"  # legacy built-in default, safe to upgrade
+    aiden.gender_identity = "female"
+    custom = db.query(CharacterProfile).filter_by(owner_key_id=owner_id, character_key="research").one()
+    custom.name = "My Mira"  # user edit, must not be overwritten
+    db.commit()
+    db.close()
+
+    profiles = {item["character_key"]: item for item in client.get("/api/v1/characters", headers=owner).json()}
+    assert profiles["android"]["name"] == "Aiden"
+    assert profiles["android"]["gender_identity"] == "male"
+    assert profiles["research"]["name"] == "My Mira"
 
 
 def test_voice_validation_gender_matching_persistence_and_isolation(monkeypatch):
@@ -50,7 +71,7 @@ def test_voice_validation_gender_matching_persistence_and_isolation(monkeypatch)
     monkeypatch.setattr(characters, "_voice_details", details)
     head = client.put("/api/v1/characters/head/voice", headers=owner, json={"voice_id": "female-voice-01", "settings": {"speed": 1.05, "stability": 0.6, "style": 0.3, "similarity_boost": 0.8}})
     assert head.status_code == 200, head.text
-    worker = client.put("/api/v1/characters/android/voice", headers=owner, json={"voice_id": "female-voice-01"})
+    worker = client.put("/api/v1/characters/android/voice", headers=owner, json={"voice_id": "male-voice-01"})
     assert worker.status_code == 200, worker.text
     mismatch = client.put("/api/v1/characters/web/voice", headers=owner, json={"voice_id": "female-voice-01"})
     assert mismatch.status_code == 422
@@ -60,12 +81,12 @@ def test_voice_validation_gender_matching_persistence_and_isolation(monkeypatch)
     loaded = {row["character_key"]: row for row in client.get("/api/v1/characters", headers=owner).json()}
     assert loaded["head"]["voice_id"] == "female-voice-01"
     assert loaded["head"]["voice_settings"]["speed"] == 1.05
-    assert loaded["android"]["voice_id"] == "female-voice-01"
+    assert loaded["android"]["voice_id"] == "male-voice-01"
     reset = client.delete("/api/v1/characters/head/voice", headers=owner)
     assert reset.status_code == 200 and reset.json()["voice_id"] is None
     loaded = {row["character_key"]: row for row in client.get("/api/v1/characters", headers=owner).json()}
     assert loaded["head"]["voice_id"] is None
-    assert loaded["android"]["voice_id"] == "female-voice-01"
+    assert loaded["android"]["voice_id"] == "male-voice-01"
 
 
 def test_voice_service_blocked_without_server_secret(monkeypatch):

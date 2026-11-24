@@ -18,7 +18,7 @@ internal data class OfficeLook(
     val accessoryName: String,
 )
 
-internal enum class WorkerPose { IDLE, WALKING, TYPING, THINKING, TALKING, MEETING, RESTING, ALERT }
+internal enum class WorkerPose { IDLE, SITTING, WALKING, TYPING, THINKING, TALKING, MEETING, RESTING, ALERT }
 
 internal data class OfficeDepartment(val name: String, val roomId: String, val subtitle: String)
 

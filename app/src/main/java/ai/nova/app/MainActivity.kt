@@ -78,7 +78,7 @@ internal data class OfficeWorld(val width: Int, val height: Int, val rooms: List
 internal data class ProviderConnectionInfo(val id: String, val provider: String, val models: List<String>, val priority: Int, val status: String)
 internal data class CharacterProfile(val key: String, val agentId: String?, val name: String, val gender: String, val age: Int?, val personality: String, val specialization: String, val communicationStyle: String, val appearance: String, val appearanceJson: String, val provider: String?, val model: String?, val availability: String, val voiceId: String?, val speed: Float, val stability: Float, val style: Float, val similarityBoost: Float, val voiceReady: Boolean)
 private data class WorkforceSnapshot<A, B, C, D, E>(val first: A, val second: B, val third: C, val fourth: D, val fifth: E)
-private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Assistant"), HQ("Headquarters"), AGENTS("Workers"), TASKS("Projects & tasks"), MEETINGS("Meetings"), ACTIVITY("Activity"), MEMORY("Memory"), INTEGRATIONS("Integrations"), GATEWAY("Gateway"), SETTINGS("Settings") }
+private enum class Section(val title: String) { HOME("Home"), ASSISTANT("Chat"), HQ("Headquarters"), AGENTS("Agents"), TASKS("Projects"), MEETINGS("Meetings"), ACTIVITY("Activity"), MEMORY("Memory"), INTEGRATIONS("Integrations"), GATEWAY("NOVA-GATEWAY"), SETTINGS("Settings") }
 
 @Composable
 private fun OfficeStepper(label: String, value: Int, onChange: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -407,7 +407,7 @@ private fun NovaApp(settings: SecureSettings) {
     ) {
       Scaffold(
         topBar = { TopAppBar(navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, "Open NOVA navigation") } }, title = { Column { Text("NOVA", fontWeight = FontWeight.Bold); Text(backendStatus, style = MaterialTheme.typography.labelSmall, maxLines = 1) } }, actions = { IconButton(onClick = { section = Section.GATEWAY }) { Icon(Icons.Default.Notifications, "Gateway activity") }; IconButton(onClick = { section = Section.GATEWAY }) { Icon(Icons.Default.Settings, "NOVA-GATEWAY account") } }) },
-        bottomBar = { NavigationBar(containerColor = Color(0xFF0D1421)) { listOf(Section.HQ, Section.GATEWAY, Section.ASSISTANT, Section.SETTINGS).forEach { item -> NavigationBarItem(selected = section == item, onClick = { section = item }, icon = { Icon(when(item){Section.HQ->Icons.Default.Business;Section.GATEWAY->Icons.Default.Hub;Section.ASSISTANT->Icons.Default.AutoAwesome;else->Icons.Default.Settings}, item.title) }, label = { Text(item.title) }) } } }
+        bottomBar = { NavigationBar(containerColor = Color(0xFF0D1421)) { listOf(Section.HQ, Section.ASSISTANT, Section.AGENTS, Section.TASKS, Section.SETTINGS).forEach { item -> NavigationBarItem(selected = section == item, onClick = { section = item }, icon = { Icon(when(item){Section.HQ->Icons.Default.Business;Section.ASSISTANT->Icons.Default.Chat;Section.AGENTS->Icons.Default.Groups;Section.TASKS->Icons.Default.FolderOpen;else->Icons.Default.Settings}, item.title) }, label = { Text(item.title) }) } } }
       ) { insets ->
         Box(Modifier.fillMaxSize().padding(insets)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 12.dp).padding(bottom = 68.dp)) {
@@ -440,7 +440,7 @@ private fun NovaApp(settings: SecureSettings) {
                         TextButton(onClick = refreshWorkforce, enabled = !workforceBusy) { Text(if (workforceBusy) "Syncing" else "Sync") }
                     }
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        LivingOfficeScene(workforceAgents, characters, providerConnections, workforceTasks, officeEvents, workerMessages, meetings, officeWorld, reduceMotion, backendStatus, onReduceMotionChange = { reduceMotion = it; settings.put("reduce_motion", it.toString()) }, modifier = Modifier.fillMaxSize(), onAgentSelected = { selectedOfficeAgent = it })
+                        TwoFloorOfficeScene(workforceAgents, characters, providerConnections, workforceTasks, officeEvents, workerMessages, meetings, reduceMotion, onReduceMotionChange = { reduceMotion = it; settings.put("reduce_motion", it.toString()) }, modifier = Modifier.fillMaxSize(), onAgentSelected = { selectedOfficeAgent = it })
                         // The environment preview remains visible while offline; its footer clearly marks live data as unavailable.
                     }
                     if (workforceAgents.isNotEmpty()) {
@@ -457,28 +457,18 @@ private fun NovaApp(settings: SecureSettings) {
                         TextButton(enabled = officeWorld != null, onClick = { officeDraft = officeWorld?.copy(); showOfficeEditor = true }) { Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Edit HQ") }
                     }
                 }
-                Section.AGENTS -> GatewayWorkspaceScreen(gatewayClient, Modifier.fillMaxSize(), onSessionChanged = { gatewaySession = it })
-                Section.TASKS -> Column(Modifier.fillMaxSize().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) { Text("Tasks", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f)); TextButton(onClick = refreshWorkforce) { Text("Refresh") } }
-                    OutlinedTextField(value = newTaskTitle, onValueChange = { newTaskTitle = it }, modifier = Modifier.fillMaxWidth(), label = { Text("New task") }, singleLine = true)
-                    OutlinedTextField(value = newTaskDescription, onValueChange = { newTaskDescription = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Details (optional)") }, maxLines = 2)
-                    Text("Requested worker · Head Manager may add helpers", style = MaterialTheme.typography.labelSmall)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        item { FilterChip(selected = requestedTaskAgentId == null, onClick = { requestedTaskAgentId = null }, label = { Text("Manager chooses") }) }
-                        items(workforceAgents.filter { it.identity != "manager" }) { agent -> FilterChip(selected = requestedTaskAgentId == agent.id, onClick = { requestedTaskAgentId = agent.id }, label = { Text(agent.name) }) }
-                    }
-                    if (workforceTasks.isNotEmpty()) {
-                        Text("Wait for these task dependencies (select any recorded tasks)", style = MaterialTheme.typography.labelSmall)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(workforceTasks) { dependency ->
-                                FilterChip(selected = dependency.id in selectedTaskDependencies, onClick = { if (dependency.id in selectedTaskDependencies) selectedTaskDependencies.remove(dependency.id) else if (selectedTaskDependencies.size < 20) selectedTaskDependencies.add(dependency.id) }, label = { Text(dependency.title.take(24)) })
-                            }
-                        }
-                    }
-                    Button(enabled = newTaskTitle.isNotBlank() && !workforceBusy, onClick = { val title = newTaskTitle.trim(); val description = newTaskDescription.trim(); val dependencies = selectedTaskDependencies.toList(); val requestedWorker = requestedTaskAgentId; scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { createWorkforceTask(base, token, title, description, dependencies, requestedWorker) }; newTaskTitle = ""; newTaskDescription = ""; selectedTaskDependencies.clear(); workforceNotice = if (requestedWorker == null) "Task saved; Head Manager will select workers." else "Task saved; the requested worker is assigned the first/core subtask." } catch (e: Exception) { workforceNotice = e.message ?: "Task could not be saved" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Save task") }
-                    Text(workforceNotice, style = MaterialTheme.typography.bodySmall)
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(workforceTasks) { task -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Text(task.title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Text(task.state) }; task.requestedAgentId?.let { requestedId -> Text("Requested worker: ${workforceAgents.firstOrNull { it.id == requestedId }?.name ?: "Unavailable"}", style = MaterialTheme.typography.labelSmall) }; if (task.state in listOf("PLANNING", "ASSIGNED", "RUNNING")) { Text("${task.progressPercent}% · ${task.progressStage.replace('_', ' ')}", style = MaterialTheme.typography.labelSmall); LinearProgressIndicator(progress = task.progressPercent / 100f, modifier = Modifier.fillMaxWidth()) }; if (!task.result.isNullOrBlank()) Text(task.result, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)); if (!task.error.isNullOrBlank()) Text(task.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall); if (task.state in listOf("RUNNING", "PLANNING", "ASSIGNED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; try { withContext(Dispatchers.IO) { cancelWorkforceTask(base, token, task.id) }; workforceNotice = "Cancellation requested. An in-flight provider call may finish before NOVA stops at the next checkpoint." } catch (e: Exception) { workforceNotice = e.message ?: "Could not request cancellation" } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Request cancel") }; if (task.state !in listOf("RUNNING", "PLANNING", "ASSIGNED", "COMPLETED", "CANCELLED")) TextButton(enabled = !workforceBusy, onClick = { scope.launch { workforceBusy = true; workforceNotice = "Routing task to NOVA-GATEWAY Head…"; try { if (gatewayClient.session() == null) throw IOException("Sign in to NOVA-GATEWAY first."); val response = withContext(Dispatchers.IO) { gatewayHeadOrchestrate(gatewayClient, "Task: ${task.title}\nDetails: ${task.result ?: task.error ?: "Description unavailable in this legacy task record."}") }; workforceNotice = "Gateway orchestration returned: ${response.take(700)}" } catch (e: Exception) { workforceNotice = e.message ?: "Gateway task orchestration failed." } finally { workforceBusy = false; refreshWorkforce() } } }) { Text("Orchestrate with gateway Head") } } } } }
-                }
+                Section.AGENTS -> CharacterRosterScreen(
+                    agents = workforceAgents,
+                    profiles = characters,
+                    tasks = workforceTasks,
+                    onOpenGateway = { section = Section.GATEWAY },
+                    onAgentSelected = { selectedOfficeAgent = it },
+                )
+                Section.TASKS -> GatewayProjectsScreen(
+                    client = gatewayClient,
+                    onOpenGateway = { section = Section.GATEWAY },
+                    modifier = Modifier.fillMaxSize(),
+                )
                 Section.MEETINGS -> Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
                     Text("Meetings & shared context", style = MaterialTheme.typography.headlineSmall)
                     Text("Legacy meeting metadata only. AI participation buttons route you to NOVA-GATEWAY; this screen does not call provider models.", style = MaterialTheme.typography.bodySmall)

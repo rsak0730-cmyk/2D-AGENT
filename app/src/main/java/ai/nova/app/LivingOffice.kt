@@ -290,7 +290,7 @@ private fun agentCellInside(agentId: String, character: OfficeCharacterState, ro
 private fun isRecent(timestamp: String): Boolean =
     runCatching { Instant.parse(timestamp).isAfter(Instant.now().minus(90, ChronoUnit.SECONDS)) }.getOrDefault(false)
 
-private fun freshCommunicators(events: List<OfficeEvent>, messages: List<WorkforceMessage>): Set<String> {
+internal fun freshCommunicators(events: List<OfficeEvent>, messages: List<WorkforceMessage>): Set<String> {
     val eventAgents = events.asSequence().filter { it.type == "agent.message" && isRecent(it.createdAt) }.flatMap { event ->
         listOfNotNull(event.agentId, runCatching { JSONObject(event.payload).optString("recipient_agent_id").takeIf { it.isNotBlank() } }.getOrNull()).asSequence()
     }
@@ -312,7 +312,7 @@ private fun agentActivityLabel(agent: WorkforceAgent, tasks: List<WorkforceTask>
 }
 
 @Composable
-private fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: Int, selected: Boolean, modelIdentity: String?, modelStatus: String, appearanceJson: String?, reduceMotion: Boolean, modifier: Modifier = Modifier) {
+internal fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: Int, selected: Boolean, modelIdentity: String?, modelStatus: String, appearanceJson: String?, reduceMotion: Boolean, modifier: Modifier = Modifier) {
     val look = remember(agent.identity, appearanceJson) { officeLook(agent.identity, appearanceJson) }
     val floatOffset by androidx.compose.animation.core.animateFloatAsState(if (!reduceMotion && phase % 2 == 0) -1.5f else if (reduceMotion) 0f else 1.5f, animationSpec = tween(1500), label = "hologram-float")
     val glowAlpha by androidx.compose.animation.core.animateFloatAsState(if (!reduceMotion && phase % 3 != 0) 0.78f else 0.94f, animationSpec = tween(900), label = "hologram-glow")
@@ -337,7 +337,7 @@ private fun PixelWorkerSprite(agent: WorkforceAgent, pose: WorkerPose, phase: In
             val blinking = pose != WorkerPose.WALKING && phase % 24 in blinkStart..(blinkStart + 1)
             val tired = pose == WorkerPose.RESTING
             val alert = pose == WorkerPose.ALERT
-            val sitting = pose in setOf(WorkerPose.TYPING, WorkerPose.THINKING, WorkerPose.MEETING)
+            val sitting = pose in setOf(WorkerPose.SITTING, WorkerPose.TYPING, WorkerPose.THINKING, WorkerPose.MEETING)
             drawOval(Color(0x70000000), Offset(w * 0.12f, h * 0.79f), Size(w * 0.76f, h * 0.13f))
             if (sitting) {
                 p(0.22f, 0.58f, 0.56f, 0.08f, Color(0xFF263C58))
