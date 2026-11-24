@@ -114,9 +114,11 @@ internal fun TwoFloorOfficeScene(
             }
 
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(16.dp))) {
+                val sceneWidth = maxWidth
+                val sceneHeight = maxHeight
                 val density = LocalDensity.current
-                val widthPx = with(density) { maxWidth.toPx() }
-                val heightPx = with(density) { maxHeight.toPx() }
+                val widthPx = with(density) { sceneWidth.toPx() }
+                val heightPx = with(density) { sceneHeight.toPx() }
                 val transform = rememberUpdatedState(zoom to pan)
                 val scaled = Modifier.fillMaxSize().graphicsLayer {
                     val current = transform.value
@@ -156,8 +158,8 @@ internal fun TwoFloorOfficeScene(
                             modelStatus = status,
                             appearanceJson = profile?.appearanceJson,
                             reduceMotion = reduceMotion,
-                            modifier = Modifier.offset(x = maxWidth * pos.first - maxWidth * 0.043f, y = maxHeight * pos.second - maxHeight * 0.115f)
-                                .size(maxWidth * 0.086f, maxHeight * 0.23f)
+                            modifier = Modifier.offset(x = sceneWidth * pos.first - sceneWidth * 0.043f, y = sceneHeight * pos.second - sceneHeight * 0.115f)
+                                .size(sceneWidth * 0.086f, sceneHeight * 0.23f)
                                 .semantics { contentDescription = "${display.name}, ${display.title}, ${pose.name.lowercase()}, ${status.lowercase()}, tap for profile" }
                                 .pointerInput(agent.id) { detectTapGestures(onTap = { onAgentSelected(display) }) },
                         )
@@ -181,8 +183,8 @@ internal fun TwoFloorOfficeScene(
                             modelStatus = modelConnectionStatus(head, task, providerConnections),
                             appearanceJson = profile?.appearanceJson,
                             reduceMotion = reduceMotion,
-                            modifier = Modifier.offset(x = maxWidth * 0.455f, y = maxHeight * 0.485f)
-                                .size(maxWidth * 0.09f, maxHeight * 0.24f)
+                            modifier = Modifier.offset(x = sceneWidth * 0.455f, y = sceneHeight * 0.485f)
+                                .size(sceneWidth * 0.09f, sceneHeight * 0.24f)
                                 .semantics { contentDescription = "${display.name}, Head, command position" }
                                 .pointerInput(head.id) { detectTapGestures(onTap = { onAgentSelected(display) }) },
                         )
